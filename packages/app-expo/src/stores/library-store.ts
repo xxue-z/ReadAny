@@ -105,6 +105,7 @@ export interface LibraryState {
   removeBookFromGroup: (bookId: string) => void;
   addTagToBook: (bookId: string, tag: string) => void;
   removeTagFromBook: (bookId: string, tag: string) => void;
+  createDocument: (title?: string) => Promise<Book | null>;
 }
 
 async function resolveAppPath(relativePath: string): Promise<string> {
@@ -201,7 +202,7 @@ async function extractMobileImportMetadata(params: {
 }
 
 function shouldAutoVectorizeMobile(format: Book["format"]): boolean {
-  return format === "epub" || format === "txt" || format === "umd";
+  return format === "epub" || format === "txt" || format === "umd" || format === "md";
 }
 
 /**
@@ -353,6 +354,7 @@ async function restoreDeletedMobileBook(
     fbz: "fbz",
     txt: "txt",
     umd: "umd",
+    md: "md",
   };
   const format: Book["format"] = formatMap[ext || ""] || "epub";
   const fileName = originalName;
@@ -472,6 +474,41 @@ async function restoreDeletedMobileBook(
     };
   }
 
+  if (ext === "md") {
+    const sourceBytes = await platform.readFile(filePath);
+    const text = new TextDecoder("utf-8").decode(sourceBytes);
+    const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
+    const converter = new MdToEpubConverter();
+    const conversion = converter.convertToBytes({ markdown: text });
+
+    await ensureAppSubDir("books");
+    const relativePath = `books/${bookId}.epub`;
+    await platform.writeFile(await resolveAppPath(relativePath), conversion.epubBytes);
+
+    // Save source .md file for re-editing
+    const mdRelPath = `books/${bookId}.md`;
+    await platform.writeFile(await resolveAppPath(mdRelPath), sourceBytes);
+
+    return {
+      ...originalBook,
+      filePath: relativePath,
+      format: "md",
+      meta: {
+        ...originalBook.meta,
+        title: conversion.bookTitle || originalBook.meta.title || fileName.replace(/\.\w+$/i, ""),
+        author: originalBook.meta.author || "",
+        coverUrl: originalBook.meta.coverUrl,
+      },
+      deletedAt: undefined,
+      fileHash,
+      syncStatus: "local",
+      isVectorized: false,
+      vectorizeProgress: 0,
+      updatedAt: Date.now(),
+      lastOpenedAt: Date.now(),
+    };
+  }
+
   const { relativePath } = await copyBookToAppData(bookId, ext || "epub", filePath);
 
   let title = originalBook.meta.title || fileName.replace(/\.\w+$/i, "") || "Untitled";
@@ -550,6 +587,7 @@ async function inspectDeletedMobileBookCandidate(
     fbz: "fbz",
     txt: "txt",
     umd: "umd",
+    md: "md",
   };
   const format: Book["format"] = formatMap[ext || ""] || "epub";
   const fileName = originalName;
@@ -645,6 +683,31 @@ async function inspectDeletedMobileBookCandidate(
       };
     }
   }
+
+  if (ext === "md") {
+    try {
+      const sourceBytes = await platform.readFile(filePath);
+      const text = new TextDecoder("utf-8").decode(sourceBytes);
+      const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
+      const converter = new MdToEpubConverter();
+      const conversion = converter.convertToBytes({ markdown: text });
+      return {
+        title: conversion.bookTitle || fileName.replace(/\.\w+$/i, "") || originalBook.meta.title,
+        author: "",
+        format: "md",
+        fileHash,
+      };
+    } catch (err) {
+      console.warn("[Library] MD inspection failed during reimport:", err);
+      return {
+        title: fileName.replace(/\.\w+$/i, "") || originalBook.meta.title,
+        author: "",
+        format: "md",
+        fileHash,
+      };
+    }
+  }
+
 
   let title = fileName.replace(/\.\w+$/i, "") || originalBook.meta.title || "Untitled";
   let author = "";
@@ -860,6 +923,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             fbz: "fbz",
             txt: "txt",
             umd: "umd",
+            md: "md",
           };
           const format: Book["format"] = formatMap[ext || ""] || "epub";
           const fileName = originalName;
@@ -1138,6 +1202,100 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             }
           }
 
+          // For MD files: parse + convert to EPUB bytes (Markdown ebook format)
+          if (ext === "md") {
+            try {
+              const sourceBytes = await platform.readFile(filePath);
+              const text = new TextDecoder("utf-8").decode(sourceBytes);
+              const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
+              const converter = new MdToEpubConverter();
+              const conversion = converter.convertToBytes({ markdown: text });
+
+              await ensureAppSubDir("books");
+              const relativePath = `books/${bookId}.epub`;
+              const absPath = await resolveAppPath(relativePath);
+              await platform.writeFile(absPath, conversion.epubBytes);
+
+              // Save source .md file for re-editing
+              const mdRelPath = `books/${bookId}.md`;
+              const mdAbsPath = await resolveAppPath(mdRelPath);
+              await platform.writeFile(mdAbsPath, sourceBytes);
+
+              const title = conversion.bookTitle || fileName.replace(/\.\w+$/i, "") || "Untitled";
+              const author = "";
+              const book: Book = {
+                id: bookId,
+                filePath: relativePath,
+                format: "md",
+                meta: {
+                  ...(deletedMatch?.meta ?? {}),
+                  title,
+                  author,
+                  coverUrl: deletedMatch?.meta.coverUrl,
+                },
+                groupId: deletedMatch?.groupId,
+                progress: deletedMatch?.progress ?? 0,
+                currentCfi: deletedMatch?.currentCfi,
+                isVectorized: false,
+                vectorizeProgress: 0,
+                tags: deletedMatch?.tags ?? [],
+                fileHash,
+                syncStatus: "local",
+                addedAt: deletedMatch?.addedAt ?? Date.now(),
+                updatedAt: Date.now(),
+                lastOpenedAt: deletedMatch?.lastOpenedAt ?? Date.now(),
+              };
+
+              if (deletedMatch) {
+                set((state) => ({ books: [...state.books, book] }));
+                await db.updateBook(book.id, {
+                  filePath: book.filePath,
+                  format: book.format,
+                  meta: book.meta,
+                  deletedAt: undefined,
+                  progress: book.progress,
+                  currentCfi: book.currentCfi,
+                  isVectorized: false,
+                  vectorizeProgress: 0,
+                  tags: book.tags,
+                  fileHash: book.fileHash,
+                  syncStatus: "local",
+                  lastOpenedAt: Date.now(),
+                });
+                debouncedSave("library-books", get().books);
+              } else {
+                await get().addBook(book);
+              }
+              result.imported.push(book);
+              if (fileHash) {
+                duplicateIndex.byHash.set(fileHash, book);
+              }
+              console.log(`[importBooks] MD imported as EPUB: ${title}`);
+
+              try {
+                const vmState = useVectorModelStore.getState();
+                if (
+                  vmState.autoVectorizeOnImport &&
+                  vmState.vectorModelEnabled &&
+                  vmState.hasVectorCapability() &&
+                  shouldAutoVectorizeMobile("md")
+                ) {
+                  const base64 = bytesToBase64(conversion.epubBytes);
+                  queueAutoVectorize(book, base64, "application/epub+zip");
+                }
+              } catch (autoVectorizeErr) {
+                console.warn(
+                  `[importBooks] Auto-vectorize enqueue failed for ${fileName}:`,
+                  autoVectorizeErr,
+                );
+              }
+              continue;
+            } catch (convErr) {
+              console.error("[importBooks] MD conversion failed:", convErr);
+              throw convErr;
+            }
+          }
+
           const { relativePath } = await copyBookToAppData(bookId, ext || "epub", filePath);
           console.log(`[importBooks] File copied. relativePath: ${relativePath}`);
 
@@ -1253,6 +1411,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
                 cbr: "application/vnd.comicbook+zip",
                 fb2: "application/x-fictionbook+xml",
                 fbz: "application/x-zip-compressed-fb2",
+                umd: "application/epub+zip",
+                md: "application/epub+zip",
                 txt: "text/plain",
               };
               const mimeType = mimeTypes[format] || "application/epub+zip";
@@ -1491,5 +1651,37 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     });
     const book = get().books.find((b) => b.id === bookId);
     if (book) db.updateBook(bookId, { tags: book.tags }).catch(() => {});
+  },
+
+  createDocument: async (title) => {
+    const bookId = generateId();
+    const markdown = title?.trim() ? "# " + title.trim() : "# Untitled";
+    const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
+    const converter = new MdToEpubConverter();
+    const result = converter.convertToBytes({ markdown, title: title?.trim() || undefined });
+    const platform = getPlatformService();
+    await ensureAppSubDir("books");
+    const relativeEpub = `books/${bookId}.epub`;
+    const relativeMd = `books/${bookId}.md`;
+    const epubPath = await resolveAppPath(relativeEpub);
+    const mdPath = await resolveAppPath(relativeMd);
+    await platform.writeFile(epubPath, result.epubBytes);
+    const encoder = new TextEncoder();
+    await platform.writeFile(mdPath, encoder.encode(markdown));
+    const book: Book = {
+      id: bookId,
+      filePath: relativeEpub,
+      format: "md",
+      meta: { title: result.bookTitle, author: "" },
+      addedAt: Date.now(),
+      updatedAt: Date.now(),
+      progress: 0,
+      isVectorized: false,
+      vectorizeProgress: 0,
+      tags: [],
+      syncStatus: "local",
+    };
+    await get().addBook(book);
+    return book;
   },
 }));

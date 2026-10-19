@@ -3,6 +3,7 @@ import { MissingBookPrompt } from "@/components/shared/MissingBookPrompt";
 import BadgesScreen from "@/screens/BadgesScreen";
 import { BookChatScreen } from "@/screens/BookChatScreen";
 import { BookDetailsScreen } from "@/screens/BookDetailsScreen";
+import { DocumentEditorScreen } from "@/screens/DocumentEditorScreen";
 import { FullScreenNotesScreen } from "@/screens/FullScreenNotesScreen";
 import { ReaderScreen } from "@/screens/ReaderScreen";
 import SkillsScreen from "@/screens/SkillsScreen";
@@ -44,6 +45,7 @@ export type RootStackParamList = {
   About: undefined;
   Feedback: undefined;
   FeedbackDetail: { issueNumber: number; title: string };
+  DocumentEditor: { bookId: string };
   FullScreenNotes: { bookId: string };
   FontSettings: undefined;
   WebDavImportBrowser: { source: WebDavImportSource };
@@ -121,6 +123,11 @@ export function RootNavigator() {
             <Stack.Screen
               name="WebDavImportBrowser"
               component={WebDavImportBrowserScreen}
+              options={{ animation: "slide_from_right" }}
+            />
+            <Stack.Screen
+              name="DocumentEditor"
+              component={DocumentEditorScreen}
               options={{ animation: "slide_from_right" }}
             />
             <Stack.Screen

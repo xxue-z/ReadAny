@@ -16,6 +16,8 @@ export type { ChatExportOptions } from "./chat-export";
 export { generateId } from "./generate-id";
 export { TxtToEpubConverter } from "./txt-to-epub";
 export type { Txt2EpubOptions, TxtConversionResult, TxtBytesConversionResult } from "./txt-to-epub";
+export { MdToEpubConverter } from "./md-to-epub";
+export type { Md2EpubOptions, MdBytesConversionResult } from "./md-to-epub";
 export { UmdToEpubConverter } from "./umd-to-epub";
 export type { Umd2EpubOptions, UmdBytesConversionResult } from "./umd-to-epub";
 export { parseUmd } from "./umd-parser";
@@ -65,3 +67,4 @@ export {
 } from "./book-metadata";
 export { getBookProgressPercent, normalizeBookProgress } from "./book-progress";
 export type { BookMetadataFormValues, ExtractedBookMetadata } from "./book-metadata";
+

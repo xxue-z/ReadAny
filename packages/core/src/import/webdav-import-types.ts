@@ -38,6 +38,7 @@ export const WEBDAV_IMPORT_SUPPORTED_EXTENSIONS = [
   "fbz",
   "txt",
   "umd",
+  "md",
 ] as const;
 
 export const DEFAULT_WEBDAV_IMPORT_REMOTE_ROOT = "";
@@ -79,3 +80,4 @@ export function isImportableWebDavBookName(name: string): boolean {
   const ext = getWebDavImportExtension(name);
   return !!ext && WEBDAV_IMPORT_SUPPORTED_EXTENSIONS.includes(ext as (typeof WEBDAV_IMPORT_SUPPORTED_EXTENSIONS)[number]);
 }
+

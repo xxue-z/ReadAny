@@ -20,6 +20,7 @@ const BOOK_MIME_TYPES = [
   "application/x-fictionbook+xml",
   "text/plain",
   "application/octet-stream",
+  "text/markdown",
 ];
 
 /** Try to open the native document picker, retrying once if another picker is still in progress. */

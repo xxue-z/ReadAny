@@ -3,7 +3,7 @@
  */
 import { create } from "zustand";
 
-export type TabType = "home" | "reader" | "chat" | "notes" | "skills" | "epubDraft";
+export type TabType = "home" | "reader" | "chat" | "notes" | "skills" | "epubDraft" | "document";
 
 export interface Tab {
   id: string;

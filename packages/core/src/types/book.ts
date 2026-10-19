@@ -34,7 +34,8 @@ export type BookFormat =
   | "fb2"
   | "fbz"
   | "txt"
-  | "umd";
+  | "umd"
+  | "md";
 
 export interface Book {
   id: string;
@@ -123,3 +124,4 @@ export interface LibraryFilter {
   sortField: SortField;
   sortOrder: SortOrder;
 }
+

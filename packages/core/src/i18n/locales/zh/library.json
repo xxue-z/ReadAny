@@ -159,7 +159,15 @@
     "detailsSelectedTags": "已选 {{count}} 个标签",
     "detailsNoTagsSelected": "未选择标签",
     "detailsManagedMetadataNote": "ReadAny 会维护这份元信息，用于书架展示、搜索和同步命名，不会修改原始书籍文件。",
-    "bookNotFound": "书籍不存在"
+    "bookNotFound": "书籍不存在",
+    "editor": {
+      "save": "保存",
+      "edit": "编辑",
+      "preview": "预览",
+      "title": "编辑文档",
+      "saved": "已保存",
+      "saveError": "保存失败"
+    }
   },
   "home": {
     "library": "书库",
@@ -186,6 +194,7 @@
     "vec_queued": "排队中",
     "manageTags": "管理标签",
     "remote": "需下载",
-    "downloading": "下载中"
+    "downloading": "下载中",
+    "newDocument": "新建文档"
   }
 }

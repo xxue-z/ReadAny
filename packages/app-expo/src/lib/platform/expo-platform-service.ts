@@ -870,6 +870,7 @@ function extensionToMime(ext: string): string {
     fbz: "application/x-zip-compressed-fb2",
     txt: "text/plain",
     umd: "application/octet-stream",
+    md: "text/markdown",
     zip: "application/zip",
     jpg: "image/jpeg",
     jpeg: "image/jpeg",

@@ -14,6 +14,7 @@ import {
   HashIcon,
   LayersIcon,
   PlusIcon,
+  EditIcon,
   SearchIcon,
   SortAscIcon,
   Trash2Icon,
@@ -224,6 +225,7 @@ export function LibraryScreen() {
     removeTagFromBook,
     removeTag,
     renameTag,
+    createDocument,
   } = useLibraryStore();
 
   const { downloadingBookId, downloadProgress, downloadBook } = useBookDownload({
@@ -249,6 +251,13 @@ export function LibraryScreen() {
       setFilter({ search: "" });
     });
   }, [searchAnim, setFilter]);
+
+  const handleNewDocument = useCallback(async () => {
+    const book = await createDocument();
+    if (book) {
+      nav.navigate("DocumentEditor", { bookId: book.id });
+    }
+  }, [createDocument, nav]);
 
   useEffect(() => {
     loadBooks();
@@ -888,6 +897,12 @@ export function LibraryScreen() {
                     />
                   </TouchableOpacity>
                 )}
+                <TouchableOpacity
+                  style={s.headerBtn}
+                  onPress={handleNewDocument}
+                >
+                  <EditIcon size={18} color={colors.mutedForeground} />
+                </TouchableOpacity>
                 <View ref={importButtonAnchorRef} collapsable={false}>
                   <TouchableOpacity
                     style={s.importBtn}

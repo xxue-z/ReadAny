@@ -5,6 +5,7 @@ import { DesktopImportActions } from "@/components/home/DesktopImportActions";
 import { GroupPickerPopover } from "@/components/home/GroupPickerPopover";
 import { SyncButton } from "@/components/ui/SyncButton";
 import { triggerVectorizeBook } from "@/lib/rag/vectorize-trigger";
+import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
 import type { Book, BookGroup, SortField } from "@readany/core/types";
 import {
@@ -19,6 +20,7 @@ import {
   Layers,
   Loader2,
   MoreHorizontal,
+  FileText,
   Plus,
   SortAsc,
   Trash2,
@@ -52,6 +54,7 @@ const SUPPORTED_EXTS = new Set([
   "txt",
   "umd",
   "cbz",
+  "md",
 ]);
 
 export function HomePage() {
@@ -88,6 +91,8 @@ export function HomePage() {
   const groupBtnRef = useRef<HTMLButtonElement>(null);
   const [isDragOver, setIsDragOver] = useState(false);
   const importBooks = useLibraryStore((s) => s.importBooks);
+  const createDocument = useLibraryStore((s) => s.createDocument);
+  const addTab = useAppStore((s) => s.addTab);
   const lastDropTime = useRef(0);
   const importBooksRef = useRef(importBooks);
   importBooksRef.current = importBooks;
@@ -644,6 +649,26 @@ export function HomePage() {
                   </button>
                 </>
               )}
+                            <button
+                type="button"
+                disabled={isImporting}
+                onClick={async () => {
+                  const book = await createDocument();
+                  if (book) {
+                    addTab({
+                      id: "document-" + book.id,
+                      type: "document",
+                      title: book.meta.title,
+                      bookId: book.id,
+                    });
+                  }
+                }}
+                className="flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-sm font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
+              >
+                <FileText className="size-4" />
+                {t("home.newDocument", "新建文档")}
+              </button>
+
               <DesktopImportActions align="end">
                 <button
                   id="tour-add-book"

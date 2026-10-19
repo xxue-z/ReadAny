@@ -18,6 +18,7 @@
 import { ChatPage as ChatPageComponent } from "@/components/chat/ChatPage";
 import { CommandPalette } from "@/components/command-palette/CommandPalette";
 import { EpubDraftWorkspace } from "@/components/epub-draft/EpubDraftWorkspace";
+import { DocumentWorkspace } from "@/components/editor/DocumentWorkspace";
 import { HomePage } from "@/components/home/HomePage";
 import { NotesPage } from "@/components/notes/NotesPage";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
@@ -129,6 +130,7 @@ export function AppLayout() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const readerTabs = tabs.filter((t) => t.type === "reader" && t.bookId);
   const draftTabs = tabs.filter((t) => t.type === "epubDraft" && t.draftId);
+  const documentTabs = tabs.filter((t) => t.type === "document" && t.bookId);
   const isReaderActive = readerTabs.some((t) => t.id === activeTabId);
   const isWorkspaceActive = draftTabs.some((t) => t.id === activeTabId);
   const [showTabBar, setShowTabBar] = useState(!isReaderActive);
@@ -405,6 +407,16 @@ export function AppLayout() {
             style={{ display: activeTabId === tab.id ? "block" : "none" }}
           >
             <EpubDraftWorkspace draftId={tab.draftId!} />
+          </div>
+        ))}
+
+        {documentTabs.map((tab) => (
+          <div
+            key={tab.id}
+            className="absolute inset-0 overflow-hidden pt-8"
+            style={{ display: activeTabId === tab.id ? "block" : "none" }}
+          >
+            <DocumentWorkspace bookId={tab.bookId!} />
           </div>
         ))}
       </main>

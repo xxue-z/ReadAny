@@ -9,6 +9,8 @@ const MIME_TYPES: Record<string, string> = {
   txt: "text/plain",
   // Mobile UMD imports are converted and stored as EPUB before vectorization.
   umd: "application/epub+zip",
+  // Mobile MD imports are converted and stored as EPUB before vectorization.
+  md: "application/epub+zip",
 };
 
 export function getMobileVectorizeMimeType(format: string | undefined): string | null {

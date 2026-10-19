@@ -34,6 +34,7 @@ export function ImportDropZone() {
             ext === "fb2" ||
             ext === "fbz" ||
             ext === "txt" ||
+            ext === "md" ||
             ext === "umd" ||
             ext === "cbz"
           ) {
