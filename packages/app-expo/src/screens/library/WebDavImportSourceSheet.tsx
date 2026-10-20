@@ -3,6 +3,7 @@ import {
   ChevronRightIcon,
   CloudIcon,
   GlobeIcon,
+  EditIcon,
 } from "@/components/ui/Icon";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import { fontSize, fontWeight, radius, useColors, withOpacity } from "@/styles/theme";
@@ -35,6 +36,7 @@ interface WebDavImportSourceSheetProps {
   onPickLocal: () => void;
   onPickSavedWebDav: () => void;
   onPickTemporaryWebDav: () => void;
+  onCreateDocument?: () => void;
 }
 
 export function WebDavImportSourceSheet({
@@ -47,6 +49,7 @@ export function WebDavImportSourceSheet({
   onPickLocal,
   onPickSavedWebDav,
   onPickTemporaryWebDav,
+  onCreateDocument,
 }: WebDavImportSourceSheetProps) {
   const { t } = useTranslation();
   const colors = useColors();
@@ -149,6 +152,26 @@ export function WebDavImportSourceSheet({
         >
           <View style={s.sheet}>
             <ScrollView style={s.options} bounces={false}>
+{onCreateDocument && (
+              <>
+                <TouchableOpacity
+                  style={s.optionCard}
+                  onPress={onCreateDocument}
+                  activeOpacity={0.85}
+                >
+                  <View style={s.iconWrap}>
+                    <EditIcon size={18} color={colors.primary} />
+                  </View>
+                  <View style={s.optionText}>
+                    <Text style={s.optionTitle}>{t("home.newDocument", "新建文档")}</Text>
+                  </View>
+                  <ChevronRightIcon size={16} color={colors.mutedForeground} />
+                </TouchableOpacity>
+                <View style={s.separator} />
+              </>
+            )}
+
+              
               <TouchableOpacity
                 style={[s.optionCard, localImportBusy && s.optionDisabled]}
                 onPress={onPickLocal}
