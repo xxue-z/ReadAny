@@ -17,6 +17,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { useAppStore } from "@/stores/app-store";
+import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { useSyncStore } from "@/stores/sync-store";
 import { cn } from "@readany/core/utils";
@@ -42,6 +43,7 @@ import { join, tempDir } from "@tauri-apps/api/path";
 import {
   ArrowLeft,
   BookOpen,
+  FileText,
   Check,
   ChevronRight,
   Cloud,
@@ -738,6 +740,8 @@ function DesktopWebDavImportBrowserDialog({
 
 export function DesktopImportActions({ children, align = "end" }: DesktopImportActionsProps) {
   const { t } = useTranslation();
+  const createDocument = useLibraryStore((s) => s.createDocument);
+  const addTab = useAppStore((s) => s.addTab);
   const importBooks = useLibraryStore((state) => state.importBooks);
   const loadSyncConfig = useSyncStore((state) => state.loadConfig);
   const syncConfig = useSyncStore((state) => state.config);
@@ -833,6 +837,31 @@ export function DesktopImportActions({ children, align = "end" }: DesktopImportA
           sideOffset={8}
           className="w-[320px] rounded-2xl border-border/80 p-1.5 shadow-xl"
         >
+          <DropdownMenuItem
+            className="items-center gap-3 rounded-xl px-3 py-2.5"
+            onSelect={async (event) => {
+              event.preventDefault();
+              const book = await createDocument();
+              if (book) {
+                addTab({
+                  id: "document-" + book.id,
+                  type: "document",
+                  title: book.meta.title,
+                  bookId: book.id,
+                });
+              }
+            }}
+          >
+            <div className="flex size-7 shrink-0 items-center justify-center text-primary">
+              <FileText className="size-4.5" />
+            </div>
+            <div className="min-w-0 flex-1 whitespace-nowrap text-sm font-medium text-foreground">
+              {t("home.newDocument", "新建文档")}
+            </div>
+            <ChevronRight className="size-4 text-muted-foreground" />
+          </DropdownMenuItem>
+          <DropdownMenuSeparator className="mx-2" />
+
           <DropdownMenuItem
             className="items-center gap-3 rounded-xl px-3 py-2.5"
             onSelect={(event) => {

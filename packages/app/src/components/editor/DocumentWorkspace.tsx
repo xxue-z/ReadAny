@@ -2,7 +2,6 @@ import { MarkdownEditor } from "@/components/ui/markdown-editor";
 import { getDesktopLibraryRoot } from "@/lib/storage/desktop-library-root";
 import { MdToEpubConverter } from "@readany/core/utils/md-to-epub";
 import { useLibraryStore } from "@/stores/library-store";
-import { resolveDesktopDataPath } from "@/lib/storage/desktop-library-root";
 import { Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -27,9 +26,13 @@ export function DocumentWorkspace({ bookId }: DocumentWorkspaceProps) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      let join, root;
       try {
         const { readFile } = await import("@tauri-apps/plugin-fs");
-        const mdPath = await resolveDesktopDataPath(`books/${bookId}.md`);
+        const pathMod = await import("@tauri-apps/api/path");
+        join = pathMod.join;
+        root = await getDesktopLibraryRoot();
+        const mdPath = await join(root, `books/${bookId}.md`);
         const bytes = await readFile(mdPath);
         const decoder = new TextDecoder();
         if (!cancelled) {
@@ -40,8 +43,6 @@ export function DocumentWorkspace({ bookId }: DocumentWorkspaceProps) {
         // If no .md source exists, try reading the book file directly
         try {
           const { readFile } = await import("@tauri-apps/plugin-fs");
-          const { join } = await import("@tauri-apps/api/path");
-          const root = await getDesktopLibraryRoot();
           const epubPath = await join(root, `books/${bookId}.epub`);
           const bytes = await readFile(epubPath);
           if (!cancelled) {
@@ -63,7 +64,7 @@ Start writing...");
       }
     })();
     return () => { cancelled = true; };
-  }, [bookId, book?.meta.title]);
+  }, [bookId]);
 
   const handleSave = useCallback(async () => {
     if (!markdown.trim()) return;
@@ -87,7 +88,9 @@ Start writing...");
       await writeFile(epubPath, result.epubBytes);
 
       const encoder = new TextEncoder();
-      const mdPath = await resolveDesktopDataPath(`books/${bookId}.md`);
+      const { join } = await import("@tauri-apps/api/path");
+        const root = await getDesktopLibraryRoot();
+        const mdPath = await join(root, `books/${bookId}.md`);
       await writeFile(mdPath, encoder.encode(markdown));
 
       toast.success(t("editor.saved", "Document saved"));

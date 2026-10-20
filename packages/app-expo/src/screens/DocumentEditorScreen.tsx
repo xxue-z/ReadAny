@@ -14,7 +14,6 @@ import {
 import { useNavigation, useRoute } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RouteProp } from "@react-navigation/native";
-import { MdToEpubConverter } from "@readany/core/utils/md-to-epub";
 import { getPlatformService } from "@readany/core/services";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -219,6 +218,7 @@ export function DocumentEditorScreen() {
     setIsSaving(true);
     try {
       const title = markdown.match(/^#\s+(.+)/m)?.[1]?.trim() || book?.meta.title || "Untitled";
+      const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
       const converter = new MdToEpubConverter();
       const result = converter.convertToBytes({ markdown, title });
 
