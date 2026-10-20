@@ -1,4 +1,4 @@
-import { ChevronLeftIcon, EyeIcon, EditIcon } from "@/components/ui/Icon";
+import { CheckIcon, ChevronLeftIcon, EyeIcon, EditIcon } from "@/components/ui/Icon";
 import { KeyboardAwareScrollView } from "@/components/ui/KeyboardAwareScrollView";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
@@ -281,7 +281,7 @@ export function DocumentEditorScreen() {
             {isSaving ? (
               <ActivityIndicator size="small" color={colors.primaryForeground} />
             ) : (
-              <Text style={s.saveText}>{t("library.editor.save", "保存")}</Text>
+              <CheckIcon size={18} color={colors.primaryForeground} />
             )}
           </TouchableOpacity>
         </View>
@@ -341,14 +341,7 @@ const makeStyles = (colors: ThemeColors, hPad: number) =>
     },
     saveBtn: {
       backgroundColor: colors.primary,
-      borderRadius: radius.md,
-      paddingHorizontal: 14,
-      width: undefined,
-    },
-    saveText: {
-      fontSize: fontSize.sm,
-      fontWeight: fontWeight.semibold,
-      color: colors.primaryForeground,
+      borderRadius: radius.full,
     },
     editor: {
       flex: 1,
