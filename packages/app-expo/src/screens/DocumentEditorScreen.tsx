@@ -191,6 +191,7 @@ export function DocumentEditorScreen() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      let errMsg = "";
       try {
         const mdPath = await getMdPath(bookId);
         const platform = getPlatformService();
@@ -211,7 +212,7 @@ export function DocumentEditorScreen() {
     return () => {
       cancelled = true;
     };
-  }, [bookId, book?.meta.title]);
+  }, [bookId]);
 
   const handleSave = useCallback(async () => {
     if (isSaving) return;
