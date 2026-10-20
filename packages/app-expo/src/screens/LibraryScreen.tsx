@@ -563,7 +563,7 @@ export function LibraryScreen() {
         return;
       }
       if (book.format === "md") {
-        nav.navigate("DocumentEditor", { bookId: book.id });
+        nav.navigate("DocumentEditor", { bookId: book.id, initialPreview: true });
       } else {
         await openMobileBook({ bookId: book.id, navigation: nav, t });
       }

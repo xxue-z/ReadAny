@@ -183,7 +183,7 @@ export function DocumentEditorScreen() {
 
   const [markdown, setMarkdown] = useState("");
   const [isLoading, setIsLoading] = useState(true);
-  const [isPreview, setIsPreview] = useState(false);
+  const [isPreview, setIsPreview] = useState(route.params.initialPreview ?? false);
   const [isSaving, setIsSaving] = useState(false);
 
   const s = useMemo(() => makeStyles(colors, layout.horizontalPadding), [colors, layout]);
