@@ -4476,6 +4476,50 @@ html, body {
     };
 
     // ─── Polyfills ───
+    if (!String.prototype.replaceAll) {
+      String.prototype.replaceAll = function (search, replace) {
+        if (search instanceof RegExp) {
+          if (!search.global) throw new TypeError('replaceAll called with a non-global RegExp argument');
+          return this.replace(search, replace);
+        }
+        return this.split(search).join(replace);
+      };
+    }
+    if (typeof structuredClone !== 'function') {
+      (function () {
+        const deepClone = function (value, seen) {
+          if (value === null || typeof value !== 'object') return value;
+          if (seen.has(value)) return seen.get(value);
+          if (value instanceof Date) return new Date(value.getTime());
+          if (value instanceof RegExp) return new RegExp(value.source, value.flags);
+          if (Array.isArray(value)) {
+            const arr = [];
+            seen.set(value, arr);
+            for (const item of value) arr.push(deepClone(item, seen));
+            return arr;
+          }
+          if (value instanceof Map) {
+            const map = new Map();
+            seen.set(value, map);
+            for (const [k, v] of value) map.set(deepClone(k, seen), deepClone(v, seen));
+            return map;
+          }
+          if (value instanceof Set) {
+            const set = new Set();
+            seen.set(value, set);
+            for (const v of value) set.add(deepClone(v, seen));
+            return set;
+          }
+          const out = {};
+          seen.set(value, out);
+          for (const k of Object.keys(value)) out[k] = deepClone(value[k], seen);
+          return out;
+        };
+        window.structuredClone = function (value) {
+          return deepClone(value, new WeakMap());
+        };
+      })();
+    }
     if (!Array.prototype.at) {
       Object.defineProperty(Array.prototype, 'at', {
         configurable: true,
