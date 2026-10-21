@@ -175,7 +175,8 @@
     }
     window.__READANY_READER_BUILD_ID = 'android-local-server-cors';
     postToRN('debug', { message: '[ReaderBuild] ' + window.__READANY_READER_BUILD_ID });
-    Promise.withResolvers ??= function () {
+    if (typeof Promise.withResolvers !== 'function') {
+      Promise.withResolvers = function () {
       let resolve;
       let reject;
       const promise = new Promise((res, rej) => {
@@ -183,7 +184,8 @@
         reject = rej;
       });
       return { promise, resolve, reject };
-    };
+      };
+    }
 
     // State
     let view = null;
@@ -4299,18 +4301,42 @@ html, body {
     };
 
     // ─── Polyfills ───
-    Object.groupBy ??= function (iterable, fn) {
+    if (!Array.prototype.at) {
+      Object.defineProperty(Array.prototype, 'at', {
+        configurable: true,
+        writable: true,
+        value: function (index) {
+          const i = Number(index) < 0 ? this.length + Number(index) : Number(index);
+          return this[i];
+        },
+      });
+    }
+    if (!String.prototype.at) {
+      Object.defineProperty(String.prototype, 'at', {
+        configurable: true,
+        writable: true,
+        value: function (index) {
+          const i = Number(index) < 0 ? this.length + Number(index) : Number(index);
+          return this[i];
+        },
+      });
+    }
+    if (typeof Object.groupBy !== 'function') {
+      Object.groupBy = function (iterable, fn) {
       const obj = Object.create(null);
       let i = 0;
       for (const v of iterable) { const k = fn(v, i++); if (k in obj) obj[k].push(v); else obj[k] = [v]; }
       return obj;
-    };
-    Map.groupBy ??= function (iterable, fn) {
+      };
+    }
+    if (typeof Map.groupBy !== 'function') {
+      Map.groupBy = function (iterable, fn) {
       const map = new Map();
       let i = 0;
       for (const v of iterable) { const k = fn(v, i++); const l = map.get(k); if (l) l.push(v); else map.set(k, [v]); }
       return map;
-    };
+      };
+    }
 
     // ─── Chapter Extraction for Vectorization ───
     function isPDFBookMessage(msg) {
