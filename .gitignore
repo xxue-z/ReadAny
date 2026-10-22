@@ -54,3 +54,9 @@ theme-studio/.claude/settings.local.json
 # Expo 本地状态（设备缓存等，不提交）
 .expo/
 
+  
+# Android APK / Hermes bytecode / dev artifacts  
+*.apk  
+*.hbc  
+bundle-check.js  
+sqlite-split.js 
