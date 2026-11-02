@@ -578,9 +578,9 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
     goToCfi: (cfi) => foliateRef.current?.goToCFI(cfi),
   });
 
-  // Track which highlights have been rendered (id -> {cfi, note, color}) to detect changes
+  // Track which highlights have been rendered (id -> {cfi, note, color, isPdf?, pdfPageIndex?}) to detect changes
   const renderedHighlightsRef = useRef<
-    Map<string, { cfi: string; hasNote: boolean; color?: HighlightColor }>
+    Map<string, { cfi: string; hasNote: boolean; color?: HighlightColor; isPdf?: boolean; pdfPageIndex?: number }>
   >(new Map());
 
   // Reset rendered highlights tracking when book changes
@@ -723,7 +723,11 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
       // Remove highlights that are no longer in the store
       for (const [id, data] of renderedHighlightsRef.current) {
         if (!currentIds.has(id)) {
-          foliateRef.current.deleteAnnotation({ value: data.cfi });
+          if (data.isPdf && data.pdfPageIndex !== undefined) {
+            foliateRef.current.removePdfHighlight(id, data.pdfPageIndex);
+          } else {
+            foliateRef.current.deleteAnnotation({ value: data.cfi });
+          }
           renderedHighlightsRef.current.delete(id);
         }
       }
@@ -735,6 +739,14 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         const existing = renderedHighlightsRef.current.get(h.id);
         const hasNote = !!h.note;
         const color = h.color || "yellow";
+        const isPdf = !!h.quadPoints;
+        const pdfPageIndex = isPdf
+          ? (() => {
+              // Derive page index from CFI: epubcfi(/6/{(pageIndex+1)*2})
+              const match = h.cfi?.match(/\/6\/(\d+)/);
+              return match ? Number.parseInt(match[1]) / 2 - 1 : undefined;
+            })()
+          : undefined;
 
         // Check if we need to re-render (new highlight, note status changed, or color changed)
         const needsRender = !existing || existing.hasNote !== hasNote || existing.color !== color;
@@ -742,17 +754,31 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         if (needsRender) {
           // Remove old annotation if exists
           if (existing) {
-            foliateRef.current.deleteAnnotation({ value: existing.cfi });
+            if (existing.isPdf && existing.pdfPageIndex !== undefined) {
+              foliateRef.current.removePdfHighlight(h.id, existing.pdfPageIndex);
+            } else {
+              foliateRef.current.deleteAnnotation({ value: existing.cfi });
+            }
           }
 
           // Add new/updated annotation
-          foliateRef.current.addAnnotation({
-            value: h.cfi,
-            type: "highlight",
+          if (isPdf && h.quadPoints && pdfPageIndex !== undefined) {
+            foliateRef.current.drawPdfHighlight(h.id, pdfPageIndex, h.quadPoints, color);
+          } else {
+            foliateRef.current.addAnnotation({
+              value: h.cfi,
+              type: "highlight",
+              color,
+              note: h.note, // Pass note for wavy underline + tooltip
+            });
+          }
+          renderedHighlightsRef.current.set(h.id, {
+            cfi: h.cfi,
+            hasNote,
             color,
-            note: h.note, // Pass note for wavy underline + tooltip
+            isPdf,
+            pdfPageIndex,
           });
-          renderedHighlightsRef.current.set(h.id, { cfi: h.cfi, hasNote, color });
         }
       }
     }, 100);
@@ -1409,16 +1435,38 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         // Re-add all highlights
         for (const h of bookHighlights) {
           if (h.cfi) {
-            foliateRef.current.addAnnotation({
-              value: h.cfi,
-              type: "highlight",
-              color: h.color || "yellow",
-              note: h.note, // Pass note for wavy underline + tooltip
-            });
+            const isPdf = !!h.quadPoints;
+            if (isPdf) {
+              // Derive page index from CFI: epubcfi(/6/{(pageIndex+1)*2})
+              const match = h.cfi.match(/\/6\/(\d+)/);
+              const pageIndex = match ? Number.parseInt(match[1]) / 2 - 1 : undefined;
+              if (pageIndex !== undefined) {
+                foliateRef.current.drawPdfHighlight(
+                  h.id,
+                  pageIndex,
+                  h.quadPoints || [],
+                  h.color || "yellow",
+                );
+              }
+            } else {
+              foliateRef.current.addAnnotation({
+                value: h.cfi,
+                type: "highlight",
+                color: h.color || "yellow",
+                note: h.note, // Pass note for wavy underline + tooltip
+              });
+            }
             renderedHighlightsRef.current.set(h.id, {
               cfi: h.cfi,
               hasNote: !!h.note,
               color: h.color || "yellow",
+              isPdf,
+              pdfPageIndex: isPdf
+                ? (() => {
+                    const match = h.cfi?.match(/\/6\/(\d+)/);
+                    return match ? Number.parseInt(match[1]) / 2 - 1 : undefined;
+                  })()
+                : undefined,
             });
           }
         }
@@ -1581,18 +1629,33 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
           ? highlights.find((h) => h.id === selection.highlightId)
           : highlights.find((h) => h.bookId === bookId && h.cfi === selection.cfi);
 
+        const isPdf = !!selection.quads && selection.pdfPageIndex !== undefined;
+
         if (existingHighlight) {
           useAnnotationStore.getState().updateHighlight(existingHighlight.id, {
             color,
             updatedAt: Date.now(),
           });
-          foliateRef.current?.deleteAnnotation({ value: existingHighlight.cfi });
-          foliateRef.current?.addAnnotation({
-            value: existingHighlight.cfi,
-            type: "highlight",
-            color,
-            note: existingHighlight.note,
-          });
+          if (isPdf && selection.pdfPageIndex !== undefined) {
+            foliateRef.current?.removePdfHighlight(
+              existingHighlight.id,
+              selection.pdfPageIndex,
+            );
+            foliateRef.current?.drawPdfHighlight(
+              existingHighlight.id,
+              selection.pdfPageIndex,
+              existingHighlight.quadPoints || selection.quads || [],
+              color,
+            );
+          } else {
+            foliateRef.current?.deleteAnnotation({ value: existingHighlight.cfi });
+            foliateRef.current?.addAnnotation({
+              value: existingHighlight.cfi,
+              type: "highlight",
+              color,
+              note: existingHighlight.note,
+            });
+          }
           setSelection(null);
           return;
         }
@@ -1605,6 +1668,7 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
           bookId,
           text: selection.text,
           cfi: selection.cfi,
+          quadPoints: selection.quads,
           color,
           chapterTitle: readerTab?.chapterTitle || undefined,
           createdAt: Date.now(),
@@ -1612,17 +1676,28 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         });
 
         // Immediately render on page (don't wait for useEffect)
-        foliateRef.current?.addAnnotation({
-          value: selection.cfi,
-          type: "highlight",
-          color,
-        });
+        if (isPdf && selection.pdfPageIndex !== undefined) {
+          foliateRef.current?.drawPdfHighlight(
+            highlightId,
+            selection.pdfPageIndex,
+            selection.quads || [],
+            color,
+          );
+        } else {
+          foliateRef.current?.addAnnotation({
+            value: selection.cfi,
+            type: "highlight",
+            color,
+          });
+        }
 
         // Track as rendered
         renderedHighlightsRef.current.set(highlightId, {
           cfi: selection.cfi,
           hasNote: false,
           color,
+          isPdf,
+          pdfPageIndex: selection.pdfPageIndex,
         });
       }
       setSelection(null);
@@ -1672,7 +1747,14 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
       useAnnotationStore.getState().removeHighlight(selection.highlightId);
 
       // Remove from view
-      foliateRef.current?.deleteAnnotation({ value: selection.cfi });
+      if (selection.quads && selection.pdfPageIndex !== undefined) {
+        foliateRef.current?.removePdfHighlight(
+          selection.highlightId,
+          selection.pdfPageIndex,
+        );
+      } else {
+        foliateRef.current?.deleteAnnotation({ value: selection.cfi });
+      }
 
       // Remove from rendered tracking
       renderedHighlightsRef.current.delete(selection.highlightId);

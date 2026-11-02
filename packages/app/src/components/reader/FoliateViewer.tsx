@@ -280,6 +280,278 @@ function getSelectionEndRect(range: Range | null): DOMRect | null {
   return rects[rects.length - 1] || range.getBoundingClientRect();
 }
 
+/**
+ * Create a PDF text selection layer that draws a semi-transparent rectangle
+ * over the text layer and extracts selected text with quadPoints.
+ *
+ * @param doc - The PDF page iframe document
+ * @param pageIndex - 0-based page index (matching the section index)
+ * @param viewport - pdf.js viewport for coordinate conversion
+ * @param onSelect - Called when selection completes
+ * @returns A cleanup function that removes the overlay
+ */
+function createPdfTextSelector(
+  doc: Document,
+  pageIndex: number,
+  viewport: { width: number; height: number; transform: number[] },
+  onSelect: (result: PdfSelectionResult) => void,
+): () => void {
+  const textLayer = doc.querySelector<HTMLDivElement>(".textLayer");
+  if (!textLayer) return () => {};
+
+  // Create selection overlay div
+  const overlay = doc.createElement("div");
+  overlay.className = "readany-pdf-selection-layer";
+  overlay.style.cssText = `
+    position: absolute;
+    inset: 0;
+    z-index: 5;
+    cursor: text;
+    user-select: none;
+    -webkit-user-select: none;
+  `;
+
+  const selectionRect = doc.createElement("div");
+  selectionRect.className = "readany-pdf-selection-rect";
+  selectionRect.style.cssText = `
+    position: absolute;
+    background: rgba(59, 130, 246, 0.2);
+    border: 1px solid rgba(59, 130, 246, 0.5);
+    pointer-events: none;
+    display: none;
+  `;
+  overlay.appendChild(selectionRect);
+
+  // Delay appending to ensure textLayer is positioned
+  requestAnimationFrame(() => {
+    textLayer.appendChild(overlay);
+  });
+
+  let isSelecting = false;
+  let startX = 0;
+  let startY = 0;
+  let currentX = 0;
+  let currentY = 0;
+
+  const getRelativePos = (e: MouseEvent): { x: number; y: number } => {
+    const rect = textLayer.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+
+  const updateSelectionRect = () => {
+    const left = Math.min(startX, currentX);
+    const top = Math.min(startY, currentY);
+    const width = Math.abs(currentX - startX);
+    const height = Math.abs(currentY - startY);
+
+    selectionRect.style.left = `${left}px`;
+    selectionRect.style.top = `${top}px`;
+    selectionRect.style.width = `${width}px`;
+    selectionRect.style.height = `${height}px`;
+    selectionRect.style.display = "block";
+  };
+
+  const onMouseDown = (e: MouseEvent) => {
+    // Don't interfere with annotation layer clicks
+    const target = e.target as HTMLElement;
+    if (target.closest?.(".annotationLayer, .annotationLayer section, a")) return;
+
+    isSelecting = true;
+    const pos = getRelativePos(e);
+    startX = pos.x;
+    startY = pos.y;
+    currentX = pos.x;
+    currentY = pos.y;
+    updateSelectionRect();
+  };
+
+  const onMouseMove = (e: MouseEvent) => {
+    if (!isSelecting) return;
+    const pos = getRelativePos(e);
+    currentX = pos.x;
+    currentY = pos.y;
+    updateSelectionRect();
+  };
+
+  const onMouseUp = () => {
+    if (!isSelecting) return;
+    isSelecting = false;
+
+    const selLeft = Math.min(startX, currentX);
+    const selTop = Math.min(startY, currentY);
+    const selRight = Math.max(startX, currentX);
+    const selBottom = Math.max(startY, currentY);
+    const selWidth = selRight - selLeft;
+    const selHeight = selBottom - selTop;
+
+    // Hide selection rect
+    selectionRect.style.display = "none";
+
+    // Require minimum selection size (3px in either dimension)
+    if (selWidth < 3 && selHeight < 3) return;
+
+    // Get the textLayer's bounding rect for coordinate conversion
+    const layerRect = textLayer.getBoundingClientRect();
+
+    // Collect text from spans that intersect the selection rectangle
+    const spans = textLayer.querySelectorAll<HTMLSpanElement>(
+      "span:not(.endOfContent):not([role='img'])",
+    );
+    const matchedItems: Array<{
+      text: string;
+      rect: DOMRect;
+      span: HTMLSpanElement;
+      centerY: number;
+      left: number;
+    }> = [];
+
+    for (const span of spans) {
+      const text = span.textContent?.trim();
+      if (!text) continue;
+
+      const spanRect = span.getBoundingClientRect();
+      if (spanRect.width === 0 || spanRect.height === 0) continue;
+
+      // Check intersection with selection rectangle (in textLayer coordinates)
+      const sL = spanRect.left - layerRect.left;
+      const sT = spanRect.top - layerRect.top;
+      const sR = spanRect.right - layerRect.left;
+      const sB = spanRect.bottom - layerRect.top;
+
+      const intersects =
+        sL < selRight && sR > selLeft && sT < selBottom && sB > selTop;
+
+      if (intersects) {
+        // Compute the intersection rect in layer coordinates
+        const intLeft = Math.max(selLeft, sL);
+        const intTop = Math.max(selTop, sT);
+        const intRight = Math.min(selRight, sR);
+        const intBottom = Math.min(selBottom, sB);
+
+        matchedItems.push({
+          text,
+          rect: new DOMRect(intLeft, intTop, intRight - intLeft, intBottom - intTop),
+          span,
+          centerY: sT + (sB - sT) / 2,
+          left: sL,
+        });
+      }
+    }
+
+    if (matchedItems.length === 0) return;
+
+    // Sort by reading order: Y then X
+    // Group by line (tolerance based on text height)
+    matchedItems.sort((a, b) => a.centerY - b.centerY || a.left - b.left);
+
+    // Build combined text
+    const combinedText = matchedItems
+      .map((item) => item.text)
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!combinedText) return;
+
+    // Compute quadPoints in viewport coordinates first,
+    // then convert to PDF page coordinates
+    const quadsViewport: number[] = [];
+    for (const item of matchedItems) {
+      const r = item.rect;
+      // Quad: top-left, top-right, bottom-right, bottom-left
+      // Convert from layer-relative to viewport coordinates
+      const vl = r.left + layerRect.left;
+      const vt = r.top + layerRect.top;
+      const vr = r.right + layerRect.left;
+      const vb = r.bottom + layerRect.top;
+      quadsViewport.push(vl, vt, vr, vt, vr, vb, vl, vb);
+    }
+
+    // Convert viewport coordinates to PDF page coordinates
+    // The viewport.transform maps from PDF space to viewport space:
+    //   [scaleX, skewY, skewX, scaleY, translateX, translateY]
+    // To go from viewport back to PDF, we invert: divide by scale, subtract translate
+    const [tScaleX, , , tScaleY, tTransX, tTransY] = viewport.transform;
+    const quadsPDF: number[] = [];
+    for (let i = 0; i < quadsViewport.length; i += 2) {
+      const vx = quadsViewport[i];
+      const vy = quadsViewport[i + 1];
+      quadsPDF.push((vx - tTransX) / tScaleX, (vy - tTransY) / tScaleY);
+    }
+
+    // Compute the overall selection rect in viewport coordinates
+    const selectionViewportRect = new DOMRect(
+      selLeft + layerRect.left,
+      selTop + layerRect.top,
+      selWidth,
+      selHeight,
+    );
+
+    onSelect({
+      text: combinedText,
+      page: pageIndex,
+      quads: quadsPDF,
+      rect: selectionViewportRect,
+    });
+  };
+
+  // Use pointer events for better compatibility
+  overlay.addEventListener("mousedown", onMouseDown);
+  doc.addEventListener("mousemove", onMouseMove);
+  doc.addEventListener("mouseup", onMouseUp);
+
+  // Also handle touch events for touch screens
+  const onTouchStart = (e: TouchEvent) => {
+    if (e.touches.length !== 1) return;
+    const target = e.target as HTMLElement;
+    if (target.closest?.(".annotationLayer, .annotationLayer section, a")) return;
+
+    isSelecting = true;
+    // Prevent default to avoid scrolling
+    e.preventDefault();
+    const pos = getRelativePos({
+      clientX: e.touches[0].clientX,
+      clientY: e.touches[0].clientY,
+    } as MouseEvent);
+    startX = pos.x;
+    startY = pos.y;
+    currentX = pos.x;
+    currentY = pos.y;
+    updateSelectionRect();
+  };
+
+  const onTouchMove = (e: TouchEvent) => {
+    if (!isSelecting || e.touches.length !== 1) return;
+    e.preventDefault();
+    const pos = getRelativePos({
+      clientX: e.touches[0].clientX,
+      clientY: e.touches[0].clientY,
+    } as MouseEvent);
+    currentX = pos.x;
+    currentY = pos.y;
+    updateSelectionRect();
+  };
+
+  const onTouchEnd = () => {
+    onMouseUp();
+  };
+
+  overlay.addEventListener("touchstart", onTouchStart, { passive: false });
+  overlay.addEventListener("touchmove", onTouchMove, { passive: false });
+  overlay.addEventListener("touchend", onTouchEnd);
+
+  // Return cleanup function
+  return () => {
+    overlay.removeEventListener("mousedown", onMouseDown);
+    doc.removeEventListener("mousemove", onMouseMove);
+    doc.removeEventListener("mouseup", onMouseUp);
+    overlay.removeEventListener("touchstart", onTouchStart);
+    overlay.removeEventListener("touchmove", onTouchMove);
+    overlay.removeEventListener("touchend", onTouchEnd);
+    overlay.remove();
+  };
+}
+
 type SelectionDragPoint = {
   x: number;
   y: number;
@@ -736,6 +1008,17 @@ export interface TOCItem {
   subitems?: TOCItem[];
 }
 
+/** Result from PDF text selection */
+export interface PdfSelectionResult {
+  text: string;
+  /** 0-based page index within the book (matches section index) */
+  page: number;
+  /** Flat array of quad points [x1,y1,x2,y2,x3,y3,x4,y4, ...] in PDF page coordinates */
+  quads: number[];
+  /** Selection bounding rect in viewport coordinates */
+  rect: DOMRect;
+}
+
 /** Selection from book content */
 export interface BookSelection {
   text: string;
@@ -746,6 +1029,10 @@ export interface BookSelection {
   annotated?: boolean; // true if this is an existing annotation
   highlightId?: string; // the existing highlight's id
   color?: string; // the existing highlight's color
+  /** PDF-specific: quad points in PDF page coordinates (for highlight storage) */
+  quads?: number[];
+  /** PDF-specific: 0-based page index */
+  pdfPageIndex?: number;
 }
 
 export interface TTSSegmentDetail {
@@ -800,6 +1087,10 @@ export interface FoliateViewerHandle {
   injectRuby: (mode: "zh-pinyin" | "zh-zhuyin" | "ja") => Promise<void>;
   /** Remove all ruby annotations from current document */
   removeRuby: () => Promise<void>;
+  /** Draw PDF highlight directly on the page (since fixed-layout renderer lacks overlayer) */
+  drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], color: string) => void;
+  /** Remove a PDF highlight from the page */
+  removePdfHighlight: (highlightId: string, pageIndex: number) => void;
 }
 
 interface FoliateViewerProps {
@@ -863,6 +1154,10 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
     // PDF theme-filter state: per-book per-page light decision + doc -> index mapping
     const pdfPageLightCacheRef = useRef<Map<string, Map<number, boolean>>>(new Map());
     const pdfDocIndexRef = useRef<WeakMap<Document, number>>(new WeakMap());
+    // PDF text selection cleanup functions keyed by document
+    const pdfSelectionCleanupRef = useRef<WeakMap<Document, () => void>>(new WeakMap());
+    // Track PDF highlight SVG elements by highlightId -> document lookup
+    const pdfHighlightElementsRef = useRef<Map<string, { doc: Document; el: SVGElement }>>(new Map());
     const [loading, setLoading] = useState(true);
     const [footnotePreview, setFootnotePreview] = useState<FootnotePreview | null>(null);
     const activeFootnoteKeyRef = useRef<string | null>(null);
@@ -1995,6 +2290,122 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
             console.warn("[removeRuby] Error:", err);
           }
         },
+        drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], color: string) => {
+          const renderer = viewRef.current?.renderer;
+          const contents = renderer?.getContents?.() as RendererContent[];
+          if (!contents) return;
+
+          // Find the iframe doc for this page
+          let targetDoc: Document | null = null;
+          for (const content of contents) {
+            if (content.doc && pdfDocIndexRef.current.get(content.doc) === pageIndex) {
+              targetDoc = content.doc;
+              break;
+            }
+          }
+          if (!targetDoc) return;
+
+          // Get scale factor for converting PDF coords to viewport coords
+          const scaleStr = targetDoc.documentElement.style.getPropertyValue(
+            "--total-scale-factor",
+          );
+          const scale = Number.parseFloat(scaleStr) || 1;
+
+          // Map color to rgba (matching drawAnnotationHandler)
+          const colorMap: Record<string, string> = {
+            red: "rgba(248, 113, 113, 0.4)",
+            yellow: "rgba(250, 204, 21, 0.4)",
+            green: "rgba(74, 222, 128, 0.4)",
+            blue: "rgba(96, 165, 250, 0.4)",
+            pink: "rgba(236, 72, 153, 0.4)",
+            purple: "rgba(192, 132, 252, 0.4)",
+            violet: "rgba(167, 139, 250, 0.4)",
+          };
+          const resolvedColor = colorMap[color] || colorMap.yellow;
+
+          // Find or create SVG overlay
+          const existingSvg = targetDoc.querySelector(
+            `[data-pdf-highlight-id="${CSS.escape(highlightId)}"]`,
+          );
+          if (existingSvg) existingSvg.remove();
+
+          const textLayer = targetDoc.querySelector<HTMLDivElement>(".textLayer");
+          if (!textLayer) return;
+
+          // Create SVG element in the text layer's coordinate space
+          const svg = targetDoc.createElementNS("http://www.w3.org/2000/svg", "svg");
+          svg.setAttribute("data-pdf-highlight-id", highlightId);
+          svg.setAttribute("data-pdf-highlight-page", String(pageIndex));
+          svg.style.cssText = `
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            z-index: 2;
+            mix-blend-mode: multiply;
+          `;
+
+          const g = targetDoc.createElementNS("http://www.w3.org/2000/svg", "g");
+          g.setAttribute("fill", resolvedColor);
+
+          // Each quad is [x1,y1,x2,y2,x3,y3,x4,y4] in PDF coordinates
+          // Convert to viewport coordinates (multiply by scale)
+          for (let i = 0; i < quads.length; i += 8) {
+            const x1 = quads[i] * scale;
+            const y1 = quads[i + 1] * scale;
+            const x2 = quads[i + 2] * scale;
+            const y2 = quads[i + 3] * scale;
+            const x3 = quads[i + 4] * scale;
+            const y3 = quads[i + 5] * scale;
+            const x4 = quads[i + 6] * scale;
+            const y4 = quads[i + 7] * scale;
+
+            // For simple axis-aligned quads, draw a rect
+            const left = Math.min(x1, x4);
+            const top = Math.min(y1, y2);
+            const width = Math.abs(x2 - x1) || Math.abs(x3 - x4);
+            const height = Math.abs(y4 - y1) || Math.abs(y3 - y2);
+
+            if (width > 0 && height > 0) {
+              const rect = targetDoc.createElementNS("http://www.w3.org/2000/svg", "rect");
+              rect.setAttribute("x", String(left));
+              rect.setAttribute("y", String(top));
+              rect.setAttribute("width", String(width));
+              rect.setAttribute("height", String(height));
+              g.appendChild(rect);
+            }
+          }
+
+          svg.appendChild(g);
+          textLayer.appendChild(svg);
+
+          // Track for cleanup
+          const prev = pdfHighlightElementsRef.current.get(highlightId);
+          if (prev) prev.el.remove();
+          pdfHighlightElementsRef.current.set(highlightId, { doc: targetDoc, el: svg });
+        },
+        removePdfHighlight: (highlightId: string, _pageIndex: number) => {
+          const entry = pdfHighlightElementsRef.current.get(highlightId);
+          if (entry) {
+            entry.el.remove();
+            pdfHighlightElementsRef.current.delete(highlightId);
+            return;
+          }
+          // Fallback: search all docs
+          const renderer = viewRef.current?.renderer;
+          const contents = renderer?.getContents?.() as RendererContent[];
+          if (!contents) return;
+
+          for (const content of contents) {
+            if (!content.doc) continue;
+            const el = content.doc.querySelector(
+              `[data-pdf-highlight-id="${CSS.escape(highlightId)}"]`,
+            );
+            if (el) {
+              el.remove();
+              return;
+            }
+          }
+        },
       }),
       [viewReady],
     );
@@ -2061,8 +2472,10 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
         // Register iframe event handlers for this section
         registerIframeEventHandlers(bookKey, detail.doc);
 
-        // Attach selection listener
-        attachSelectionListener(detail.doc);
+        // Attach selection listener (skip for PDF - handled by PDF text selector)
+        if (format !== "PDF") {
+          attachSelectionListener(detail.doc);
+        }
 
         setLoading(false);
         onLoaded?.();
@@ -2078,6 +2491,73 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
         if (format === "PDF" && detail.doc) {
           pdfDocIndexRef.current.set(detail.doc, detail.index ?? 0);
           void applyPdfPageThemeFilter(detail.doc, detail.index ?? 0, appTheme);
+
+          // Set up PDF text selection overlay
+          const pageIndex = detail.index ?? 0;
+          // Get the scale from the CSS custom property set by pdf.js render
+          const scaleStr = detail.doc.documentElement.style.getPropertyValue(
+            "--total-scale-factor",
+          );
+          const scale = Number.parseFloat(scaleStr) || 1;
+          // Viewport dimensions from the textLayer
+          const textLayer = detail.doc.querySelector<HTMLDivElement>(".textLayer");
+          const vpWidth = textLayer?.clientWidth ?? detail.doc.documentElement.clientWidth;
+          const vpHeight = textLayer?.clientHeight ?? detail.doc.documentElement.clientHeight;
+          const viewport = {
+            width: vpWidth,
+            height: vpHeight,
+            transform: [scale, 0, 0, scale, 0, 0],
+          };
+
+          // Clean up previous selection handler for this doc if any
+          const prevCleanup = pdfSelectionCleanupRef.current.get(detail.doc);
+          if (prevCleanup) prevCleanup();
+
+          const cleanup = createPdfTextSelector(
+            detail.doc,
+            pageIndex,
+            viewport,
+            (result: PdfSelectionResult) => {
+              // detail.doc is guaranteed non-null here (checked above)
+              const doc = detail.doc!;
+              // Build a fake CFI for PDF pages
+              const cfi = `epubcfi(/6/${(pageIndex + 1) * 2})`;
+              // Compute selection rects in main window coordinates
+              const iframe = doc.defaultView
+                ?.frameElement as HTMLIFrameElement | null;
+              let rects: DOMRect[];
+              if (iframe) {
+                const iframeRect = iframe.getBoundingClientRect();
+                const sX = iframe.clientWidth > 0
+                  ? iframeRect.width / iframe.clientWidth
+                  : 1;
+                const sY = iframe.clientHeight > 0
+                  ? iframeRect.height / iframe.clientHeight
+                  : 1;
+                rects = [
+                  new DOMRect(
+                    iframeRect.left + result.rect.x * sX,
+                    iframeRect.top + result.rect.y * sY,
+                    result.rect.width * sX,
+                    result.rect.height * sY,
+                  ),
+                ];
+              } else {
+                rects = [result.rect];
+              }
+
+              const bookSelection: BookSelection = {
+                text: result.text,
+                cfi,
+                chapterIndex: pageIndex,
+                rects,
+                quads: result.quads,
+                pdfPageIndex: pageIndex,
+              };
+              onSelectionRef.current?.(bookSelection);
+            },
+          );
+          pdfSelectionCleanupRef.current.set(detail.doc, cleanup);
         }
 
         // Inject ruby annotations if enabled for this book
@@ -2855,6 +3335,9 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
         // Reset PDF theme-filter caches when (re)opening a book
         pdfPageLightCacheRef.current = new Map();
         pdfDocIndexRef.current = new WeakMap();
+        // Clean up PDF selection handlers and highlight elements
+        pdfSelectionCleanupRef.current = new WeakMap();
+        pdfHighlightElementsRef.current = new Map();
         try {
           await import("foliate-js/view.js");
 
