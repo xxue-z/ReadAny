@@ -36,6 +36,7 @@ export {
   isMindmapPart,
 } from "./message";
 export * from "./rag";
+export * from "./quiz";
 export * from "./reading";
 export * from "./skill";
 export * from "./translation";

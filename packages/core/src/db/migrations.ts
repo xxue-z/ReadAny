@@ -126,6 +126,40 @@ const migrations: Migration[] = [
     description: "Add quad_points column to highlights for PDF highlight positioning",
     up: "ALTER TABLE highlights ADD COLUMN quad_points TEXT",
   },
+  {
+    version: 15,
+    description: "Create quiz_sessions table",
+    up: `CREATE TABLE IF NOT EXISTS quiz_sessions (
+      id TEXT PRIMARY KEY, type TEXT NOT NULL, config TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending', score REAL,
+      time_spent INTEGER DEFAULT 0, created_at INTEGER NOT NULL,
+      completed_at INTEGER
+    )`,
+  },
+  {
+    version: 16,
+    description: "Create quiz_questions table",
+    up: `CREATE TABLE IF NOT EXISTS quiz_questions (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL,
+      type TEXT NOT NULL, stem TEXT NOT NULL,
+      options TEXT, answer TEXT NOT NULL,
+      source_book_id TEXT, source_chapter TEXT,
+      difficulty INTEGER DEFAULT 1, user_answer TEXT,
+      is_correct INTEGER, created_at INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES quiz_sessions(id)
+    )`,
+  },
+  {
+    version: 17,
+    description: "Create question_bank table",
+    up: `CREATE TABLE IF NOT EXISTS question_bank (
+      id TEXT PRIMARY KEY, question_id TEXT NOT NULL,
+      tags TEXT, usage_count INTEGER DEFAULT 0,
+      correct_rate REAL, variant_of TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (question_id) REFERENCES quiz_questions(id)
+    )`,
+  },
 ];
 
 /** Run pending migrations */
