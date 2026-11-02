@@ -21,7 +21,7 @@ import { hasSeenReaderTour, startReaderTour } from "@/lib/reader-tour";
 import { DocumentLoader } from "@/lib/reader/document-loader";
 import type { BookDoc, BookFormat } from "@/lib/reader/document-loader";
 import { isFixedLayoutBook } from "@/lib/reader/document-loader";
-import { resolveDesktopDataPath } from "@/lib/storage/desktop-library-root";
+import { getCachedBlob } from "@/lib/reader/blob-cache";
 import { useAnnotationStore } from "@/stores/annotation-store";
 import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
@@ -31,6 +31,7 @@ import { useReaderStore } from "@/stores/reader-store";
 import { useSettingsStore } from "@/stores/settings-store";
 import { useTTSStore } from "@/stores/tts-store";
 import { useChapterTranslation } from "@readany/core/hooks";
+import { findOverlappingPdfHighlight } from "@readany/core/pdf/highlight-geometry";
 import { getPlatformService } from "@readany/core/services";
 import { getCSSFontFace, useFontStore, useReadingSessionStore } from "@readany/core/stores";
 import { useRubyStore } from "@readany/core/stores/ruby-store";
@@ -72,6 +73,18 @@ const BOOK_IMPORT_FILTERS = [
   },
 ];
 
+/**
+ * PDF highlights store a page-scoped fake CFI (`epubcfi(/6/{2*(page+1)})`),
+ * so the page index has to be derived from the CFI.
+ */
+function pdfPageIndexOfHighlight(highlight: { cfi?: string }): number | undefined {
+  if (!highlight.cfi) return undefined;
+  const match = highlight.cfi.match(/\/6\/(\d+)/);
+  if (!match) return undefined;
+  const pageIndex = Number.parseInt(match[1], 10) / 2 - 1;
+  return Number.isFinite(pageIndex) && pageIndex >= 0 ? pageIndex : undefined;
+}
+
 function normalizeFixedLayoutZoom(value: number): number {
   if (!Number.isFinite(value)) return 1;
   const rounded = Math.round(value * 10) / 10;
@@ -108,54 +121,11 @@ async function measureReflowableBookCharacters(bookDoc: BookDoc): Promise<number
   return totalCharacters > 0 ? totalCharacters : null;
 }
 
-// --- Tauri file loading ---
-async function loadFileAsBlob(filePath: string): Promise<Blob> {
-  // Resolve managed relative paths (e.g., "books/{id}.epub") to the active desktop library root.
-  const resolvedPath = await resolveDesktopDataPath(filePath);
-
-  try {
-    const { convertFileSrc } = await import("@tauri-apps/api/core");
-    const assetUrl =
-      resolvedPath.startsWith("asset://") || resolvedPath.startsWith("http")
-        ? resolvedPath
-        : convertFileSrc(resolvedPath);
-    const response = await fetch(assetUrl);
-    if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
-    return await response.blob();
-  } catch {
-    const { readFile } = await import("@tauri-apps/plugin-fs");
-    const fileBytes = await readFile(resolvedPath);
-    return new Blob([fileBytes]);
-  }
-}
-
-// --- Blob cache ---
-const fileBlobCache = new Map<string, Blob>();
-const MAX_CACHE_SIZE = 5;
-
-/** Remove a specific file from the blob cache (called on tab close / hibernate) */
-export function evictBlobCache(filePath: string): void {
-  fileBlobCache.delete(filePath);
-}
-
-/** Clear all entries from the blob cache */
-export function clearBlobCache(): void {
-  fileBlobCache.clear();
-}
-
-async function getCachedBlob(filePath: string): Promise<Blob> {
-  const cached = fileBlobCache.get(filePath);
-  if (cached) return cached;
-
-  const blob = await loadFileAsBlob(filePath);
-
-  if (fileBlobCache.size >= MAX_CACHE_SIZE) {
-    const firstKey = fileBlobCache.keys().next().value;
-    if (firstKey) fileBlobCache.delete(firstKey);
-  }
-  fileBlobCache.set(filePath, blob);
-  return blob;
-}
+// --- Tauri file loading / blob cache ---
+// The cache itself lives in `lib/reader/blob-cache` so that non-reader code can
+// invalidate an entry after rewriting a book file. Re-exported here for the
+// existing imports (TabBar, AppLayout, …).
+export { clearBlobCache, evictBlobCache } from "@/lib/reader/blob-cache";
 
 function getTTSSegmentIdentity(
   segment: { text?: string | null; cfi?: string | null } | null | undefined,
@@ -657,6 +627,13 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         if (!Number.isNaN(pageNum)) {
           foliateRef.current?.goToIndex(Math.max(0, pageNum - 1));
         }
+        return;
+      }
+
+      // Legacy CBZ page notes used a 0-based `page-{n}` location.
+      const legacyPage = target.match(/^page-(\d+)$/);
+      if (legacyPage) {
+        foliateRef.current?.goToIndex(Math.max(0, Number.parseInt(legacyPage[1], 10)));
         return;
       }
 
@@ -1625,11 +1602,20 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
     (color: HighlightColor = viewSettings.defaultHighlightColor ?? "yellow") => {
       if (selection && selection.cfi) {
         updateReadSettings({ defaultHighlightColor: color });
-        const existingHighlight = selection.highlightId
-          ? highlights.find((h) => h.id === selection.highlightId)
-          : highlights.find((h) => h.bookId === bookId && h.cfi === selection.cfi);
 
         const isPdf = !!selection.quads && selection.pdfPageIndex !== undefined;
+        // PDF highlights all share the same page CFI, so identity has to come
+        // from the geometry; EPUB keeps the CFI comparison.
+        const existingHighlight = selection.highlightId
+          ? highlights.find((h) => h.id === selection.highlightId)
+          : isPdf
+            ? findOverlappingPdfHighlight(
+                highlights.filter((h) => h.bookId === bookId),
+                selection.pdfPageIndex as number,
+                selection.quads as number[],
+                pdfPageIndexOfHighlight,
+              )
+            : highlights.find((h) => h.bookId === bookId && h.cfi === selection.cfi);
 
         if (existingHighlight) {
           useAnnotationStore.getState().updateHighlight(existingHighlight.id, {
@@ -1715,20 +1701,28 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
   // Handle note button - open notebook panel with pending note
   const handleNote = useCallback(() => {
     if (selection && selection.cfi) {
-      // Check if this selection is already highlighted
-      const existingHighlight = highlights.find(
-        (h) => h.bookId === bookId && h.cfi === selection.cfi,
-      );
+      const isPdf = !!selection.quads && selection.pdfPageIndex !== undefined;
+      // Same rule as handleHighlight: PDF identity is geometric, not CFI-based.
+      const existingHighlight = isPdf
+        ? findOverlappingPdfHighlight(
+            highlights.filter((h) => h.bookId === bookId),
+            selection.pdfPageIndex as number,
+            selection.quads as number[],
+            pdfPageIndexOfHighlight,
+          )
+        : highlights.find((h) => h.bookId === bookId && h.cfi === selection.cfi);
 
       if (existingHighlight) {
         // Edit note on existing highlight
         useNotebookStore.getState().startEditNote(existingHighlight);
       } else {
-        // Start new note
+        // Start new note (carry the PDF position so the highlight is visible)
         useNotebookStore.getState().startNewNote({
           text: selection.text,
           cfi: selection.cfi,
           chapterTitle: readerTab?.chapterTitle,
+          quads: selection.quads,
+          pdfPageIndex: selection.pdfPageIndex,
         });
       }
     }
@@ -2939,8 +2933,10 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
       {/* Notebook sidebar — LEFT side */}
       <NotebookSidebarWrapper
         bookId={bookId}
-        onGoToCfi={navigateToCfi}
+        onGoToCfi={navigateToReaderLocation}
         onAddAnnotation={(cfi, color, note) => {
+          // PDF highlights cannot use foliate's annotation overlayer; the note
+          // UI creates the highlight and FoliateViewer paints it from quadPoints.
           foliateRef.current?.addAnnotation({
             value: cfi,
             type: "highlight",
@@ -3100,7 +3096,6 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
                 annotated={selection.annotated}
                 currentColor={selection.color as HighlightColor | undefined}
                 defaultColor={viewSettings.defaultHighlightColor ?? "yellow"}
-                isPdf={bookFormat === "PDF"}
                 onHighlight={handleHighlight}
                 onRemoveHighlight={handleRemoveHighlight}
                 onNote={handleNote}

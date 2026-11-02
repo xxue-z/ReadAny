@@ -143,10 +143,12 @@ export function ReaderToolbar({
 
   const handleAddCbzPageNote = () => {
     if (!bookId || bookFormat !== "CBZ") return;
-    // Use 0-based page index for CFI (consistent with foliate-js CBZ fake CFI scheme)
-    const pageIndex = currentPage > 0 ? currentPage - 1 : 0;
-    const cfi = `page-${pageIndex}`;
-    const chapterTitle = `Page ${currentPage}`;
+    // `page:N` (1-based) is the app-wide convention for PDF/CBZ locations and
+    // is understood by ReaderView.navigateToReaderLocation, so clicking the note
+    // actually jumps to the page.
+    const pageNumber = currentPage > 0 ? currentPage : 1;
+    const cfi = `page:${pageNumber}`;
+    const chapterTitle = t("notebook.pageNNote", { n: pageNumber });
     startNewNote({
       text: chapterTitle,
       cfi,

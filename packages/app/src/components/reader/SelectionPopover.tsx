@@ -23,7 +23,6 @@ interface SelectionPopoverProps {
   annotated?: boolean; // true if this is an existing annotation
   currentColor?: HighlightColor; // current highlight color (for existing annotations)
   defaultColor?: HighlightColor;
-  isPdf?: boolean; // true if viewing a PDF (highlight disabled)
   onHighlight: (color: HighlightColor) => void;
   onRemoveHighlight: () => void;
   onNote: () => void;
@@ -42,7 +41,6 @@ export function SelectionPopover({
   annotated = false,
   currentColor,
   defaultColor = "yellow",
-  isPdf = false,
   onHighlight,
   onRemoveHighlight,
   onNote,
@@ -169,15 +167,13 @@ export function SelectionPopover({
               key={btn.label}
               className={cn(
                 "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
-                btn.disabled ? "cursor-not-allowed opacity-40" : "hover:bg-muted",
+                "hover:bg-muted",
                 btn.isHighlight && showColors && "bg-muted",
                 btn.isDestructive &&
-                  !btn.disabled &&
                   "text-muted-foreground hover:bg-destructive/10 hover:text-destructive",
               )}
               title={btn.label}
-              onClick={btn.disabled ? undefined : btn.onClick}
-              disabled={btn.disabled}
+              onClick={btn.onClick}
             >
               <btn.icon className="h-4 w-4" />
             </button>

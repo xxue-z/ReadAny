@@ -14,6 +14,7 @@ import type {
 } from "@readany/core/translation/chapter-translator";
 import { cleanText, isTTSFootnoteMarker, shouldSkipTTSNode } from "@readany/core/tts";
 import type { ViewSettings } from "@readany/core/types";
+import { cssRectsToPdfQuads } from "@readany/core/pdf/highlight-geometry";
 import {
   buildJustifyCss,
   detectJustifyCapabilities,
@@ -280,275 +281,154 @@ function getSelectionEndRect(range: Range | null): DOMRect | null {
   return rects[rects.length - 1] || range.getBoundingClientRect();
 }
 
+/** Merge per-span rects that belong to the same visual line. */
+function mergeSelectionRects(rects: DOMRect[], tolerance = 2): DOMRect[] {
+  const sorted = [...rects].sort((a, b) => a.top - b.top || a.left - b.left);
+  const lines: DOMRect[] = [];
+  for (const rect of sorted) {
+    const last = lines[lines.length - 1];
+    const sameLine =
+      last !== undefined &&
+      Math.abs(rect.top - last.top) <= tolerance &&
+      Math.abs(rect.bottom - last.bottom) <= tolerance &&
+      rect.left <= last.right + tolerance * 2;
+    if (sameLine && last) {
+      const left = Math.min(last.left, rect.left);
+      const right = Math.max(last.right, rect.right);
+      const top = Math.min(last.top, rect.top);
+      const bottom = Math.max(last.bottom, rect.bottom);
+      lines[lines.length - 1] = new DOMRect(left, top, right - left, bottom - top);
+    } else {
+      lines.push(rect);
+    }
+  }
+  return lines;
+}
+
 /**
- * Create a PDF text selection layer that draws a semi-transparent rectangle
- * over the text layer and extracts selected text with quadPoints.
+ * Wire PDF text selection for one page.
  *
- * @param doc - The PDF page iframe document
- * @param pageIndex - 0-based page index (matching the section index)
- * @param viewport - pdf.js viewport for coordinate conversion
- * @param onSelect - Called when selection completes
- * @returns A cleanup function that removes the overlay
+ * This reuses pdf.js' own text selection instead of covering the text layer with
+ * a custom overlay. The overlay used to swallow `pointerdown`, which made
+ * pdf.js believe the drag started on blank space (so it panned the page while
+ * the user was selecting) and it disabled native word-selection / Ctrl+C.
+ *
+ * Listeners live on the iframe document, not on the text layer's children, so a
+ * zoom re-render (which replaces those children) does not detach them.
+ *
+ * @param doc - PDF page iframe document
+ * @param getPageIndex - resolved lazily; the same doc instance may be re-bound
+ * @param onSelect - called with the selected text and PDF-space quad points
+ * @returns cleanup function
  */
-function createPdfTextSelector(
+function attachPdfTextSelection(
   doc: Document,
-  pageIndex: number,
-  viewport: { width: number; height: number; transform: number[] },
+  getPageIndex: () => number,
   onSelect: (result: PdfSelectionResult) => void,
 ): () => void {
   const textLayer = doc.querySelector<HTMLDivElement>(".textLayer");
   if (!textLayer) return () => {};
 
-  // Create selection overlay div
-  const overlay = doc.createElement("div");
-  overlay.className = "readany-pdf-selection-layer";
-  overlay.style.cssText = `
-    position: absolute;
-    inset: 0;
-    z-index: 5;
-    cursor: text;
-    user-select: none;
-    -webkit-user-select: none;
-  `;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let lastText = "";
+  let lastHandledAt = 0;
 
-  const selectionRect = doc.createElement("div");
-  selectionRect.className = "readany-pdf-selection-rect";
-  selectionRect.style.cssText = `
-    position: absolute;
-    background: rgba(59, 130, 246, 0.2);
-    border: 1px solid rgba(59, 130, 246, 0.5);
-    pointer-events: none;
-    display: none;
-  `;
-  overlay.appendChild(selectionRect);
+  const readSelection = () => {
+    timer = null;
+    const selection = doc.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) return;
 
-  // Delay appending to ensure textLayer is positioned
-  requestAnimationFrame(() => {
-    textLayer.appendChild(overlay);
-  });
+    const text = selection.toString().replace(/\s+/g, " ").trim();
+    if (!text) return;
 
-  let isSelecting = false;
-  let startX = 0;
-  let startY = 0;
-  let currentX = 0;
-  let currentY = 0;
+    const now = Date.now();
+    if (text === lastText && now - lastHandledAt < 600) return;
 
-  const getRelativePos = (e: MouseEvent): { x: number; y: number } => {
-    const rect = textLayer.getBoundingClientRect();
-    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-  };
+    const range = selection.getRangeAt(0);
+    const anchorNode = range.commonAncestorContainer;
+    const anchorElement =
+      anchorNode.nodeType === Node.ELEMENT_NODE
+        ? (anchorNode as Element)
+        : anchorNode.parentElement;
+    if (anchorElement?.closest?.(".annotationLayer, a")) return;
 
-  const updateSelectionRect = () => {
-    const left = Math.min(startX, currentX);
-    const top = Math.min(startY, currentY);
-    const width = Math.abs(currentX - startX);
-    const height = Math.abs(currentY - startY);
+    const rawRects = Array.from(range.getClientRects()).filter(
+      (rect) => rect.width > 1 && rect.height > 1,
+    );
+    if (rawRects.length === 0) return;
 
-    selectionRect.style.left = `${left}px`;
-    selectionRect.style.top = `${top}px`;
-    selectionRect.style.width = `${width}px`;
-    selectionRect.style.height = `${height}px`;
-    selectionRect.style.display = "block";
-  };
-
-  const onMouseDown = (e: MouseEvent) => {
-    // Don't interfere with annotation layer clicks
-    const target = e.target as HTMLElement;
-    if (target.closest?.(".annotationLayer, .annotationLayer section, a")) return;
-
-    isSelecting = true;
-    const pos = getRelativePos(e);
-    startX = pos.x;
-    startY = pos.y;
-    currentX = pos.x;
-    currentY = pos.y;
-    updateSelectionRect();
-  };
-
-  const onMouseMove = (e: MouseEvent) => {
-    if (!isSelecting) return;
-    const pos = getRelativePos(e);
-    currentX = pos.x;
-    currentY = pos.y;
-    updateSelectionRect();
-  };
-
-  const onMouseUp = () => {
-    if (!isSelecting) return;
-    isSelecting = false;
-
-    const selLeft = Math.min(startX, currentX);
-    const selTop = Math.min(startY, currentY);
-    const selRight = Math.max(startX, currentX);
-    const selBottom = Math.max(startY, currentY);
-    const selWidth = selRight - selLeft;
-    const selHeight = selBottom - selTop;
-
-    // Hide selection rect
-    selectionRect.style.display = "none";
-
-    // Require minimum selection size (3px in either dimension)
-    if (selWidth < 3 && selHeight < 3) return;
-
-    // Get the textLayer's bounding rect for coordinate conversion
+    const lineRects = mergeSelectionRects(rawRects as DOMRect[]);
     const layerRect = textLayer.getBoundingClientRect();
+    const localRects = lineRects.map((rect) => ({
+      left: rect.left - layerRect.left,
+      top: rect.top - layerRect.top,
+      right: rect.right - layerRect.left,
+      bottom: rect.bottom - layerRect.top,
+    }));
 
-    // Collect text from spans that intersect the selection rectangle
-    const spans = textLayer.querySelectorAll<HTMLSpanElement>(
-      "span:not(.endOfContent):not([role='img'])",
+    // The scale factor is current at selection time, which is what makes the
+    // stored quads zoom-independent (they are converted back to PDF space).
+    const scaleStr = doc.documentElement.style.getPropertyValue("--total-scale-factor");
+    const scale = Number.parseFloat(scaleStr) || 1;
+    const quads = cssRectsToPdfQuads(localRects, scale);
+    if (quads.length === 0) return;
+
+    const bounds = localRects.reduce(
+      (acc, rect) => ({
+        left: Math.min(acc.left, rect.left),
+        top: Math.min(acc.top, rect.top),
+        right: Math.max(acc.right, rect.right),
+        bottom: Math.max(acc.bottom, rect.bottom),
+      }),
+      {
+        left: Number.POSITIVE_INFINITY,
+        top: Number.POSITIVE_INFINITY,
+        right: Number.NEGATIVE_INFINITY,
+        bottom: Number.NEGATIVE_INFINITY,
+      },
     );
-    const matchedItems: Array<{
-      text: string;
-      rect: DOMRect;
-      span: HTMLSpanElement;
-      centerY: number;
-      left: number;
-    }> = [];
+    if (!Number.isFinite(bounds.left) || !Number.isFinite(bounds.top)) return;
 
-    for (const span of spans) {
-      const text = span.textContent?.trim();
-      if (!text) continue;
-
-      const spanRect = span.getBoundingClientRect();
-      if (spanRect.width === 0 || spanRect.height === 0) continue;
-
-      // Check intersection with selection rectangle (in textLayer coordinates)
-      const sL = spanRect.left - layerRect.left;
-      const sT = spanRect.top - layerRect.top;
-      const sR = spanRect.right - layerRect.left;
-      const sB = spanRect.bottom - layerRect.top;
-
-      const intersects =
-        sL < selRight && sR > selLeft && sT < selBottom && sB > selTop;
-
-      if (intersects) {
-        // Compute the intersection rect in layer coordinates
-        const intLeft = Math.max(selLeft, sL);
-        const intTop = Math.max(selTop, sT);
-        const intRight = Math.min(selRight, sR);
-        const intBottom = Math.min(selBottom, sB);
-
-        matchedItems.push({
-          text,
-          rect: new DOMRect(intLeft, intTop, intRight - intLeft, intBottom - intTop),
-          span,
-          centerY: sT + (sB - sT) / 2,
-          left: sL,
-        });
-      }
-    }
-
-    if (matchedItems.length === 0) return;
-
-    // Sort by reading order: Y then X
-    // Group by line (tolerance based on text height)
-    matchedItems.sort((a, b) => a.centerY - b.centerY || a.left - b.left);
-
-    // Build combined text
-    const combinedText = matchedItems
-      .map((item) => item.text)
-      .join(" ")
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (!combinedText) return;
-
-    // Compute quadPoints in viewport coordinates first,
-    // then convert to PDF page coordinates
-    const quadsViewport: number[] = [];
-    for (const item of matchedItems) {
-      const r = item.rect;
-      // Quad: top-left, top-right, bottom-right, bottom-left
-      // Convert from layer-relative to viewport coordinates
-      const vl = r.left + layerRect.left;
-      const vt = r.top + layerRect.top;
-      const vr = r.right + layerRect.left;
-      const vb = r.bottom + layerRect.top;
-      quadsViewport.push(vl, vt, vr, vt, vr, vb, vl, vb);
-    }
-
-    // Convert viewport coordinates to PDF page coordinates
-    // The viewport.transform maps from PDF space to viewport space:
-    //   [scaleX, skewY, skewX, scaleY, translateX, translateY]
-    // To go from viewport back to PDF, we invert: divide by scale, subtract translate
-    const [tScaleX, , , tScaleY, tTransX, tTransY] = viewport.transform;
-    const quadsPDF: number[] = [];
-    for (let i = 0; i < quadsViewport.length; i += 2) {
-      const vx = quadsViewport[i];
-      const vy = quadsViewport[i + 1];
-      quadsPDF.push((vx - tTransX) / tScaleX, (vy - tTransY) / tScaleY);
-    }
-
-    // Compute the overall selection rect in viewport coordinates
-    const selectionViewportRect = new DOMRect(
-      selLeft + layerRect.left,
-      selTop + layerRect.top,
-      selWidth,
-      selHeight,
-    );
+    lastText = text;
+    lastHandledAt = now;
 
     onSelect({
-      text: combinedText,
-      page: pageIndex,
-      quads: quadsPDF,
-      rect: selectionViewportRect,
+      text,
+      page: getPageIndex(),
+      quads,
+      rect: new DOMRect(
+        bounds.left,
+        bounds.top,
+        bounds.right - bounds.left,
+        bounds.bottom - bounds.top,
+      ),
     });
   };
 
-  // Use pointer events for better compatibility
-  overlay.addEventListener("mousedown", onMouseDown);
-  doc.addEventListener("mousemove", onMouseMove);
-  doc.addEventListener("mouseup", onMouseUp);
-
-  // Also handle touch events for touch screens
-  const onTouchStart = (e: TouchEvent) => {
-    if (e.touches.length !== 1) return;
-    const target = e.target as HTMLElement;
-    if (target.closest?.(".annotationLayer, .annotationLayer section, a")) return;
-
-    isSelecting = true;
-    // Prevent default to avoid scrolling
-    e.preventDefault();
-    const pos = getRelativePos({
-      clientX: e.touches[0].clientX,
-      clientY: e.touches[0].clientY,
-    } as MouseEvent);
-    startX = pos.x;
-    startY = pos.y;
-    currentX = pos.x;
-    currentY = pos.y;
-    updateSelectionRect();
+  const schedule = () => {
+    if (timer) clearTimeout(timer);
+    // Give pdf.js' own pointerup handler a chance to finish first.
+    timer = setTimeout(readSelection, 0);
   };
 
-  const onTouchMove = (e: TouchEvent) => {
-    if (!isSelecting || e.touches.length !== 1) return;
-    e.preventDefault();
-    const pos = getRelativePos({
-      clientX: e.touches[0].clientX,
-      clientY: e.touches[0].clientY,
-    } as MouseEvent);
-    currentX = pos.x;
-    currentY = pos.y;
-    updateSelectionRect();
+  const onPointerUp = () => schedule();
+  const onKeyUp = (event: KeyboardEvent) => {
+    if (event.shiftKey || ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a")) {
+      schedule();
+    }
   };
 
-  const onTouchEnd = () => {
-    onMouseUp();
-  };
+  doc.addEventListener("pointerup", onPointerUp, { passive: true });
+  doc.addEventListener("mouseup", onPointerUp, { passive: true });
+  doc.addEventListener("touchend", onPointerUp, { passive: true });
+  doc.addEventListener("keyup", onKeyUp);
 
-  overlay.addEventListener("touchstart", onTouchStart, { passive: false });
-  overlay.addEventListener("touchmove", onTouchMove, { passive: false });
-  overlay.addEventListener("touchend", onTouchEnd);
-
-  // Return cleanup function
   return () => {
-    overlay.removeEventListener("mousedown", onMouseDown);
-    doc.removeEventListener("mousemove", onMouseMove);
-    doc.removeEventListener("mouseup", onMouseUp);
-    overlay.removeEventListener("touchstart", onTouchStart);
-    overlay.removeEventListener("touchmove", onTouchMove);
-    overlay.removeEventListener("touchend", onTouchEnd);
-    overlay.remove();
+    if (timer) clearTimeout(timer);
+    doc.removeEventListener("pointerup", onPointerUp);
+    doc.removeEventListener("mouseup", onPointerUp);
+    doc.removeEventListener("touchend", onPointerUp);
+    doc.removeEventListener("keyup", onKeyUp);
   };
 }
 
@@ -1127,6 +1007,123 @@ interface FootnotePreview {
   bottom?: number;
 }
 
+/** Registered PDF highlight used to re-paint overlays after a zoom re-render. */
+interface PdfDrawnHighlight {
+  pageIndex: number;
+  quads: number[];
+  color: string;
+}
+
+const PDF_HIGHLIGHT_COLORS: Record<string, string> = {
+  red: "rgba(248, 113, 113, 0.4)",
+  yellow: "rgba(250, 204, 21, 0.4)",
+  green: "rgba(74, 222, 128, 0.4)",
+  blue: "rgba(96, 165, 250, 0.4)",
+  pink: "rgba(236, 72, 153, 0.4)",
+  purple: "rgba(192, 132, 252, 0.4)",
+  violet: "rgba(167, 139, 250, 0.4)",
+};
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * Paint a PDF highlight as an SVG overlay inside the page's text layer.
+ *
+ * Returns false when the page is not currently mounted (e.g. the highlight is
+ * on a page the renderer has unloaded).
+ */
+function paintPdfHighlight(options: {
+  view: FoliateView | null;
+  pageIndexForDoc: (doc: Document) => number | undefined;
+  highlightId: string;
+  pageIndex: number;
+  quads: number[];
+  color: string;
+  elements: Map<string, { doc: Document; el: SVGElement }>;
+  drawn: Map<string, PdfDrawnHighlight>;
+}): boolean {
+  const { view, pageIndexForDoc, highlightId, pageIndex, quads, color, elements, drawn } = options;
+
+  const contents = view?.renderer?.getContents?.() as RendererContent[] | undefined;
+  if (!contents) return false;
+
+  let targetDoc: Document | null = null;
+  for (const content of contents) {
+    if (content.doc && pageIndexForDoc(content.doc) === pageIndex) {
+      targetDoc = content.doc;
+      break;
+    }
+  }
+  if (!targetDoc) return false;
+
+  const scaleStr = targetDoc.documentElement.style.getPropertyValue("--total-scale-factor");
+  const scale = Number.parseFloat(scaleStr) || 1;
+  const resolvedColor = PDF_HIGHLIGHT_COLORS[color] || PDF_HIGHLIGHT_COLORS.yellow;
+
+  targetDoc.querySelector(`[data-pdf-highlight-id="${CSS.escape(highlightId)}"]`)?.remove();
+
+  const textLayer = targetDoc.querySelector<HTMLDivElement>(".textLayer");
+  if (!textLayer) return false;
+
+  const svg = targetDoc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("data-pdf-highlight-id", highlightId);
+  svg.setAttribute("data-pdf-highlight-page", String(pageIndex));
+  // `width/height: 100%` is required: an SVG is a replaced element, so with
+  // `inset: 0` alone it falls back to its intrinsic 300x150 size and clips
+  // anything outside that box.
+  svg.style.cssText = `
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+    pointer-events: none;
+    z-index: 2;
+    mix-blend-mode: multiply;
+  `;
+
+  const g = targetDoc.createElementNS(SVG_NS, "g");
+  g.setAttribute("fill", resolvedColor);
+
+  // Each quad is [x1,y1,x2,y2,x3,y3,x4,y4] in PDF coordinates; the page is
+  // displayed at `scale`, so multiply to get CSS pixels inside the text layer.
+  for (let i = 0; i + 7 < quads.length; i += 8) {
+    const x1 = quads[i] * scale;
+    const y1 = quads[i + 1] * scale;
+    const x2 = quads[i + 2] * scale;
+    const y2 = quads[i + 3] * scale;
+    const x3 = quads[i + 4] * scale;
+    const y3 = quads[i + 5] * scale;
+    const x4 = quads[i + 6] * scale;
+    const y4 = quads[i + 7] * scale;
+
+    // Axis-aligned quads: render as a rect.
+    const left = Math.min(x1, x4);
+    const top = Math.min(y1, y2);
+    const width = Math.abs(x2 - x1) || Math.abs(x3 - x4);
+    const height = Math.abs(y4 - y1) || Math.abs(y3 - y2);
+
+    if (width > 0 && height > 0) {
+      const rect = targetDoc.createElementNS(SVG_NS, "rect");
+      rect.setAttribute("x", String(left));
+      rect.setAttribute("y", String(top));
+      rect.setAttribute("width", String(width));
+      rect.setAttribute("height", String(height));
+      g.appendChild(rect);
+    }
+  }
+
+  svg.appendChild(g);
+  textLayer.appendChild(svg);
+
+  const prev = elements.get(highlightId);
+  if (prev) prev.el.remove();
+  elements.set(highlightId, { doc: targetDoc, el: svg });
+  drawn.set(highlightId, { pageIndex, quads: [...quads], color });
+  return true;
+}
+
 export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>(
   function FoliateViewer(
     {
@@ -1158,6 +1155,9 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
     const pdfSelectionCleanupRef = useRef<WeakMap<Document, () => void>>(new WeakMap());
     // Track PDF highlight SVG elements by highlightId -> document lookup
     const pdfHighlightElementsRef = useRef<Map<string, { doc: Document; el: SVGElement }>>(new Map());
+    // Remember painted PDF highlights so they can be re-painted after pdf.js
+    // replaces the text layer on zoom / resize.
+    const pdfDrawnHighlightsRef = useRef<Map<string, PdfDrawnHighlight>>(new Map());
     const [loading, setLoading] = useState(true);
     const [footnotePreview, setFootnotePreview] = useState<FootnotePreview | null>(null);
     const activeFootnoteKeyRef = useRef<string | null>(null);
@@ -2290,100 +2290,20 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
             console.warn("[removeRuby] Error:", err);
           }
         },
-        drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], color: string) => {
-          const renderer = viewRef.current?.renderer;
-          const contents = renderer?.getContents?.() as RendererContent[];
-          if (!contents) return;
-
-          // Find the iframe doc for this page
-          let targetDoc: Document | null = null;
-          for (const content of contents) {
-            if (content.doc && pdfDocIndexRef.current.get(content.doc) === pageIndex) {
-              targetDoc = content.doc;
-              break;
-            }
-          }
-          if (!targetDoc) return;
-
-          // Get scale factor for converting PDF coords to viewport coords
-          const scaleStr = targetDoc.documentElement.style.getPropertyValue(
-            "--total-scale-factor",
-          );
-          const scale = Number.parseFloat(scaleStr) || 1;
-
-          // Map color to rgba (matching drawAnnotationHandler)
-          const colorMap: Record<string, string> = {
-            red: "rgba(248, 113, 113, 0.4)",
-            yellow: "rgba(250, 204, 21, 0.4)",
-            green: "rgba(74, 222, 128, 0.4)",
-            blue: "rgba(96, 165, 250, 0.4)",
-            pink: "rgba(236, 72, 153, 0.4)",
-            purple: "rgba(192, 132, 252, 0.4)",
-            violet: "rgba(167, 139, 250, 0.4)",
-          };
-          const resolvedColor = colorMap[color] || colorMap.yellow;
-
-          // Find or create SVG overlay
-          const existingSvg = targetDoc.querySelector(
-            `[data-pdf-highlight-id="${CSS.escape(highlightId)}"]`,
-          );
-          if (existingSvg) existingSvg.remove();
-
-          const textLayer = targetDoc.querySelector<HTMLDivElement>(".textLayer");
-          if (!textLayer) return;
-
-          // Create SVG element in the text layer's coordinate space
-          const svg = targetDoc.createElementNS("http://www.w3.org/2000/svg", "svg");
-          svg.setAttribute("data-pdf-highlight-id", highlightId);
-          svg.setAttribute("data-pdf-highlight-page", String(pageIndex));
-          svg.style.cssText = `
-            position: absolute;
-            inset: 0;
-            pointer-events: none;
-            z-index: 2;
-            mix-blend-mode: multiply;
-          `;
-
-          const g = targetDoc.createElementNS("http://www.w3.org/2000/svg", "g");
-          g.setAttribute("fill", resolvedColor);
-
-          // Each quad is [x1,y1,x2,y2,x3,y3,x4,y4] in PDF coordinates
-          // Convert to viewport coordinates (multiply by scale)
-          for (let i = 0; i < quads.length; i += 8) {
-            const x1 = quads[i] * scale;
-            const y1 = quads[i + 1] * scale;
-            const x2 = quads[i + 2] * scale;
-            const y2 = quads[i + 3] * scale;
-            const x3 = quads[i + 4] * scale;
-            const y3 = quads[i + 5] * scale;
-            const x4 = quads[i + 6] * scale;
-            const y4 = quads[i + 7] * scale;
-
-            // For simple axis-aligned quads, draw a rect
-            const left = Math.min(x1, x4);
-            const top = Math.min(y1, y2);
-            const width = Math.abs(x2 - x1) || Math.abs(x3 - x4);
-            const height = Math.abs(y4 - y1) || Math.abs(y3 - y2);
-
-            if (width > 0 && height > 0) {
-              const rect = targetDoc.createElementNS("http://www.w3.org/2000/svg", "rect");
-              rect.setAttribute("x", String(left));
-              rect.setAttribute("y", String(top));
-              rect.setAttribute("width", String(width));
-              rect.setAttribute("height", String(height));
-              g.appendChild(rect);
-            }
-          }
-
-          svg.appendChild(g);
-          textLayer.appendChild(svg);
-
-          // Track for cleanup
-          const prev = pdfHighlightElementsRef.current.get(highlightId);
-          if (prev) prev.el.remove();
-          pdfHighlightElementsRef.current.set(highlightId, { doc: targetDoc, el: svg });
+drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], color: string) => {
+          paintPdfHighlight({
+            view: viewRef.current,
+            pageIndexForDoc: (doc) => pdfDocIndexRef.current.get(doc),
+            highlightId,
+            pageIndex,
+            quads,
+            color,
+            elements: pdfHighlightElementsRef.current,
+            drawn: pdfDrawnHighlightsRef.current,
+          });
         },
         removePdfHighlight: (highlightId: string, _pageIndex: number) => {
+          pdfDrawnHighlightsRef.current.delete(highlightId);
           const entry = pdfHighlightElementsRef.current.get(highlightId);
           if (entry) {
             entry.el.remove();
@@ -2492,48 +2412,29 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
           pdfDocIndexRef.current.set(detail.doc, detail.index ?? 0);
           void applyPdfPageThemeFilter(detail.doc, detail.index ?? 0, appTheme);
 
-          // Set up PDF text selection overlay
+          // Set up PDF text selection (reuses pdf.js' native selection so copy,
+          // word selection and drag-to-pan keep working).
           const pageIndex = detail.index ?? 0;
-          // Get the scale from the CSS custom property set by pdf.js render
-          const scaleStr = detail.doc.documentElement.style.getPropertyValue(
-            "--total-scale-factor",
-          );
-          const scale = Number.parseFloat(scaleStr) || 1;
-          // Viewport dimensions from the textLayer
-          const textLayer = detail.doc.querySelector<HTMLDivElement>(".textLayer");
-          const vpWidth = textLayer?.clientWidth ?? detail.doc.documentElement.clientWidth;
-          const vpHeight = textLayer?.clientHeight ?? detail.doc.documentElement.clientHeight;
-          const viewport = {
-            width: vpWidth,
-            height: vpHeight,
-            transform: [scale, 0, 0, scale, 0, 0],
-          };
 
           // Clean up previous selection handler for this doc if any
           const prevCleanup = pdfSelectionCleanupRef.current.get(detail.doc);
           if (prevCleanup) prevCleanup();
 
-          const cleanup = createPdfTextSelector(
+          const cleanup = attachPdfTextSelection(
             detail.doc,
-            pageIndex,
-            viewport,
+            () => pdfDocIndexRef.current.get(detail.doc!) ?? pageIndex,
             (result: PdfSelectionResult) => {
               // detail.doc is guaranteed non-null here (checked above)
               const doc = detail.doc!;
-              // Build a fake CFI for PDF pages
-              const cfi = `epubcfi(/6/${(pageIndex + 1) * 2})`;
+              // Build a fake CFI for PDF pages (page index encoded as /6/{2*(i+1)})
+              const cfi = `epubcfi(/6/${(result.page + 1) * 2})`;
               // Compute selection rects in main window coordinates
-              const iframe = doc.defaultView
-                ?.frameElement as HTMLIFrameElement | null;
+              const iframe = doc.defaultView?.frameElement as HTMLIFrameElement | null;
               let rects: DOMRect[];
               if (iframe) {
                 const iframeRect = iframe.getBoundingClientRect();
-                const sX = iframe.clientWidth > 0
-                  ? iframeRect.width / iframe.clientWidth
-                  : 1;
-                const sY = iframe.clientHeight > 0
-                  ? iframeRect.height / iframe.clientHeight
-                  : 1;
+                const sX = iframe.clientWidth > 0 ? iframeRect.width / iframe.clientWidth : 1;
+                const sY = iframe.clientHeight > 0 ? iframeRect.height / iframe.clientHeight : 1;
                 rects = [
                   new DOMRect(
                     iframeRect.left + result.rect.x * sX,
@@ -2549,10 +2450,10 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
               const bookSelection: BookSelection = {
                 text: result.text,
                 cfi,
-                chapterIndex: pageIndex,
+                chapterIndex: result.page,
                 rects,
                 quads: result.quads,
-                pdfPageIndex: pageIndex,
+                pdfPageIndex: result.page,
               };
               onSelectionRef.current?.(bookSelection);
             },
@@ -3534,6 +3435,32 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
       isFixedLayout,
       appTheme,
     ]);
+
+    // --- Re-paint PDF highlights after a zoom re-render ---
+    // pdf.js replaces the text layer's children on every zoom/resize (and on the
+    // initial render), which removes the SVG overlays we painted. Re-paint them
+    // once the new render settles.
+    useEffect(() => {
+      if (!isFixedLayout) return;
+      if (pdfDrawnHighlightsRef.current.size === 0) return;
+      const timer = setTimeout(() => {
+        const view = viewRef.current;
+        if (!view) return;
+        for (const [highlightId, entry] of pdfDrawnHighlightsRef.current) {
+          paintPdfHighlight({
+            view,
+            pageIndexForDoc: (doc) => pdfDocIndexRef.current.get(doc),
+            highlightId,
+            pageIndex: entry.pageIndex,
+            quads: entry.quads,
+            color: entry.color,
+            elements: pdfHighlightElementsRef.current,
+            drawn: pdfDrawnHighlightsRef.current,
+          });
+        }
+      }, 350);
+      return () => clearTimeout(timer);
+    }, [viewSettings.fixedLayoutZoom, isFixedLayout]);
 
     // Re-scale the content area when the window resizes (max-inline-size is
     // computed from renderer.clientWidth at book-open).

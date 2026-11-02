@@ -15,6 +15,10 @@ export interface PendingNote {
   highlightId?: string;
   /** Existing note content (if editing) */
   existingNote?: string;
+  /** PDF: quad points in page coordinate space (so the highlight is visible) */
+  quads?: number[];
+  /** PDF: 0-based page index */
+  pdfPageIndex?: number;
 }
 
 export interface NotebookState {

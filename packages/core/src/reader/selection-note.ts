@@ -14,6 +14,8 @@ export interface SelectionNoteMutationInput {
   existingHighlight?: ExistingHighlightRef | null;
   defaultColor?: HighlightColor;
   now?: number;
+  /** PDF: quad points in page coordinate space. */
+  quads?: number[];
 }
 
 export type SelectionNoteMutation =
@@ -54,6 +56,7 @@ export function createSelectionNoteMutation(
       color: input.defaultColor ?? "yellow",
       note: normalizedNote,
       chapterTitle: input.chapterTitle,
+      quadPoints: input.quads && input.quads.length > 0 ? [...input.quads] : undefined,
       createdAt: timestamp,
       updatedAt: timestamp,
     },

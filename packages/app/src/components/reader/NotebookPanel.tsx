@@ -51,14 +51,8 @@ export function NotebookPanel({
 }: NotebookPanelProps) {
   const { t } = useTranslation();
 
-  const {
-    pendingNote,
-    editingHighlight,
-    clearPending,
-    saveDraft,
-    getDraft,
-    clearDraft,
-  } = useNotebookStore();
+  const { pendingNote, editingHighlight, clearPending, saveDraft, getDraft, clearDraft } =
+    useNotebookStore();
 
   const {
     highlights,
@@ -92,31 +86,33 @@ export function NotebookPanel({
   // Distinguish CBZ standalone notes from highlight-linked notes
   const isCbz = bookFormat === "CBZ";
 
+  // Drafts are scoped per book: CBZ page notes all use "Page N" as their text,
+  // so a text-only key would leak the draft between books.
+  const draftKey = pendingNote ? `${bookId}:${pendingNote.cfi}` : "";
+
   // Initialize note content when editing starts
   useEffect(() => {
     if (pendingNote) {
       // Check for saved draft
-      const draft = getDraft(pendingNote.text);
+      const draft = getDraft(draftKey);
       setNoteContent(draft || pendingNote.existingNote || "");
     } else if (editingHighlight) {
       setNoteContent(editingHighlight.note || "");
     }
-  }, [pendingNote, editingHighlight, getDraft]);
+  }, [pendingNote, editingHighlight, getDraft, draftKey]);
 
   // Auto-save draft on content change
   useEffect(() => {
-    if (pendingNote && noteContent) {
-      saveDraft(pendingNote.text, noteContent);
+    if (pendingNote && noteContent && draftKey) {
+      saveDraft(draftKey, noteContent);
     }
-  }, [noteContent, pendingNote, saveDraft]);
+  }, [noteContent, pendingNote, saveDraft, draftKey]);
 
   const handleSave = () => {
     if (pendingNote) {
       if (isCbz) {
         // CBZ: create standalone Note (no highlight linkage)
-        const existingNote = bookNotes.find(
-          (n) => n.cfi === pendingNote.cfi && !n.highlightId,
-        );
+        const existingNote = bookNotes.find((n) => n.cfi === pendingNote.cfi && !n.highlightId);
         if (existingNote) {
           updateAnnotationNote(existingNote.id, {
             content: noteContent,
@@ -137,7 +133,7 @@ export function NotebookPanel({
           });
         }
         // Clear draft
-        clearDraft(pendingNote.text);
+        clearDraft(draftKey);
         clearPending();
       } else {
         // EPUB/PDF: highlight + note via createSelectionNoteMutation
@@ -148,13 +144,18 @@ export function NotebookPanel({
           note: noteContent,
           chapterTitle: pendingNote.chapterTitle,
           defaultColor: "yellow",
+          // PDF notes must carry the quads, otherwise the highlight cannot be
+          // painted on the page and would only exist in the notebook list.
+          quads: pendingNote.quads,
         });
         if (mutation.kind === "create") {
           addHighlight(mutation.highlight);
-          onAddAnnotation?.(pendingNote.cfi, mutation.highlight.color, mutation.highlight.note);
+          if (!pendingNote.quads) {
+            onAddAnnotation?.(pendingNote.cfi, mutation.highlight.color, mutation.highlight.note);
+          }
         }
         // Clear draft
-        clearDraft(pendingNote.text);
+        clearDraft(draftKey);
         clearPending();
       }
     } else if (editingHighlight) {
@@ -168,11 +169,7 @@ export function NotebookPanel({
       });
       if (mutation.kind === "update") {
         updateHighlight(mutation.id, mutation.updates);
-        onAddAnnotation?.(
-          editingHighlight.cfi,
-          editingHighlight.color,
-          mutation.updates.note,
-        );
+        onAddAnnotation?.(editingHighlight.cfi, editingHighlight.color, mutation.updates.note);
       }
       clearPending();
     }
@@ -498,10 +495,14 @@ interface CbzNoteItemProps {
 function CbzNoteItem({ note, onClick, onEdit, onDelete, isActive }: CbzNoteItemProps) {
   const { t } = useTranslation();
 
-  // Extract page number from cfi "page-{n}" — 0-based, display 1-based
+  // Extract the page number from the CFI.
+  // - `page:N` is 1-based (current format, shared with reader navigation)
+  // - `page-N` is 0-based (legacy notes created before the format change)
   const pageNumber = useMemo(() => {
-    const match = note.cfi?.match(/^page-(\d+)$/);
-    return match ? Number.parseInt(match[1], 10) + 1 : null;
+    const current = note.cfi?.match(/^page:(\d+)$/);
+    if (current) return Number.parseInt(current[1], 10);
+    const legacy = note.cfi?.match(/^page-(\d+)$/);
+    return legacy ? Number.parseInt(legacy[1], 10) + 1 : null;
   }, [note.cfi]);
 
   // First line of content as preview
@@ -524,9 +525,7 @@ function CbzNoteItem({ note, onClick, onEdit, onDelete, isActive }: CbzNoteItemP
             {pageNumber != null ? t("notebook.pageNNote", { n: pageNumber }) : note.title}
           </p>
           {contentPreview && (
-            <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
-              {contentPreview}
-            </p>
+            <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{contentPreview}</p>
           )}
           {note.chapterTitle && (
             <p className="mt-1 text-xs text-muted-foreground/70">{note.chapterTitle}</p>
