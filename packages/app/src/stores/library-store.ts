@@ -674,7 +674,7 @@ async function inspectDeletedDesktopBookCandidate(
     } catch (err) {
       console.warn("[Library] MD title extraction failed:", err);
     }
-    return { title, author, format: "epub", fileHash };
+    return { title, author, format: "md", fileHash };
   }
 
   try {
