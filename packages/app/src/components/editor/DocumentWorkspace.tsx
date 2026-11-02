@@ -1,7 +1,8 @@
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
 import { getDesktopLibraryRoot } from "@/lib/storage/desktop-library-root";
+import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
-import { Save } from "lucide-react";
+import { BookOpen, Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -14,6 +15,8 @@ export function DocumentWorkspace({ bookId }: DocumentWorkspaceProps) {
   const { t } = useTranslation();
   const books = useLibraryStore((s) => s.books);
   const saveDocument = useLibraryStore((s) => s.saveDocument);
+  const addTab = useAppStore((s) => s.addTab);
+  const setActiveTab = useAppStore((s) => s.setActiveTab);
   const [markdown, setMarkdown] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -119,6 +122,18 @@ Start writing...`);
           {isSaving && (
             <span className="text-xs text-muted-foreground">{t("editor.saving", "Saving...")}</span>
           )}
+          <button
+            type="button"
+            onClick={() => {
+              const tabId = `reader-${bookId}`;
+              addTab({ id: tabId, type: "reader", title: book?.meta.title ?? "", bookId });
+              setActiveTab(tabId);
+            }}
+            className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-1.5 text-xs font-medium text-foreground hover:bg-muted"
+          >
+            <BookOpen className="h-3.5 w-3.5" />
+            {t("editor.read", "阅读")}
+          </button>
           <button
             type="button"
             onClick={handleSave}

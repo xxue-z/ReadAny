@@ -1,4 +1,4 @@
-import { CheckIcon, ChevronLeftIcon, EyeIcon, EditIcon } from "@/components/ui/Icon";
+import { BookOpenIcon, CheckIcon, ChevronLeftIcon, EyeIcon, EditIcon } from "@/components/ui/Icon";
 import { KeyboardAwareScrollView } from "@/components/ui/KeyboardAwareScrollView";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
@@ -327,6 +327,12 @@ export function DocumentEditorScreen() {
           {book?.meta.title || t("library.editor.title", "编辑文档")}
         </Text>
         <View style={s.headerActions}>
+          <TouchableOpacity
+            style={s.headerBtn}
+            onPress={() => nav.navigate("Reader", { bookId })}
+          >
+            <BookOpenIcon size={18} color={colors.mutedForeground} />
+          </TouchableOpacity>
           <TouchableOpacity
             style={s.headerBtn}
             onPress={() => setIsPreview(!isPreview)}
