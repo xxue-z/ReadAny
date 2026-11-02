@@ -8,20 +8,20 @@ import type { BookDoc, BookFormat } from "@/lib/reader/document-loader";
 import { getDirection, isFixedLayoutBook } from "@/lib/reader/document-loader";
 import { getFontTheme } from "@/lib/reader/font-themes";
 import { registerIframeEventHandlers } from "@/lib/reader/iframe-event-handlers";
+import { cssRectsToPdfQuads } from "@readany/core/pdf/highlight-geometry";
+import {
+  type JustifyCapabilities,
+  buildJustifyCss,
+  detectJustifyCapabilities,
+  pinAlignedBrContainers,
+  unpinAlignedBrContainers,
+} from "@readany/core/reader/justified-text";
 import type {
   ChapterParagraph,
   ChapterTranslationResult,
 } from "@readany/core/translation/chapter-translator";
 import { cleanText, isTTSFootnoteMarker, shouldSkipTTSNode } from "@readany/core/tts";
 import type { ViewSettings } from "@readany/core/types";
-import { cssRectsToPdfQuads } from "@readany/core/pdf/highlight-geometry";
-import {
-  buildJustifyCss,
-  detectJustifyCapabilities,
-  pinAlignedBrContainers,
-  unpinAlignedBrContainers,
-  type JustifyCapabilities,
-} from "@readany/core/reader/justified-text";
 import { Overlayer } from "foliate-js/overlayer.js";
 import { marked } from "marked";
 /**
@@ -968,7 +968,12 @@ export interface FoliateViewerHandle {
   /** Remove all ruby annotations from current document */
   removeRuby: () => Promise<void>;
   /** Draw PDF highlight directly on the page (since fixed-layout renderer lacks overlayer) */
-  drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], color: string) => void;
+  drawPdfHighlight: (
+    highlightId: string,
+    pageIndex: number,
+    quads: number[],
+    color: string,
+  ) => void;
   /** Remove a PDF highlight from the page */
   removePdfHighlight: (highlightId: string, pageIndex: number) => void;
 }
@@ -1154,7 +1159,9 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
     // PDF text selection cleanup functions keyed by document
     const pdfSelectionCleanupRef = useRef<WeakMap<Document, () => void>>(new WeakMap());
     // Track PDF highlight SVG elements by highlightId -> document lookup
-    const pdfHighlightElementsRef = useRef<Map<string, { doc: Document; el: SVGElement }>>(new Map());
+    const pdfHighlightElementsRef = useRef<Map<string, { doc: Document; el: SVGElement }>>(
+      new Map(),
+    );
     // Remember painted PDF highlights so they can be re-painted after pdf.js
     // replaces the text layer on zoom / resize.
     const pdfDrawnHighlightsRef = useRef<Map<string, PdfDrawnHighlight>>(new Map());
@@ -2219,7 +2226,7 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
             const doc = contents[0].doc as Document;
 
             const elements = doc.querySelectorAll(".readany-translation");
-            elements.forEach((el) => el.remove());
+            for (const el of elements) el.remove();
 
             const style = doc.getElementById("readany-chapter-translation-style");
             style?.remove();
@@ -2239,13 +2246,13 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
 
             // Update original paragraphs visibility
             const originalParagraphs = doc.querySelectorAll("[data-translate-id]");
-            originalParagraphs.forEach((el) => {
+            for (const el of originalParagraphs) {
               (el as HTMLElement).setAttribute("data-original-hidden", String(!originalVisible));
-            });
+            }
 
             // Update translation visibility
             const translations = doc.querySelectorAll(".readany-translation");
-            translations.forEach((el) => {
+            for (const el of translations) {
               const translationEl = el as HTMLElement;
               translationEl.setAttribute("data-hidden", String(!translationVisible));
               // If only translation is visible (no original), apply solo style
@@ -2253,7 +2260,7 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
                 "data-solo",
                 String(!originalVisible && translationVisible),
               );
-            });
+            }
           } catch (err) {
             console.error("[applyChapterTranslationVisibility] Error:", err);
           }
@@ -2290,7 +2297,12 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
             console.warn("[removeRuby] Error:", err);
           }
         },
-drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], color: string) => {
+        drawPdfHighlight: (
+          highlightId: string,
+          pageIndex: number,
+          quads: number[],
+          color: string,
+        ) => {
           paintPdfHighlight({
             view: viewRef.current,
             pageIndexForDoc: (doc) => pdfDocIndexRef.current.get(doc),
@@ -2327,7 +2339,7 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
           }
         },
       }),
-      [viewReady],
+      [clearTTSHighlight, getTTSSegmentContext, getVisibleTTSSegments, goNextByMode, goPrevByMode],
     );
 
     // --- Hooks ---
@@ -2372,7 +2384,7 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
               : undefined,
         }));
       },
-      [clearTTSHighlight, ensureDesktopTTS, getVisibleTTSSegments],
+      [],
     );
 
     // --- Section load handler ---
@@ -2408,24 +2420,24 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
         }
 
         // PDF: follow the app theme with per-page smart inversion (dark/sepia)
-        if (format === "PDF" && detail.doc) {
-          pdfDocIndexRef.current.set(detail.doc, detail.index ?? 0);
-          void applyPdfPageThemeFilter(detail.doc, detail.index ?? 0, appTheme);
+        const pdfDoc = detail.doc;
+        if (format === "PDF" && pdfDoc) {
+          pdfDocIndexRef.current.set(pdfDoc, detail.index ?? 0);
+          void applyPdfPageThemeFilter(pdfDoc, detail.index ?? 0, appTheme);
 
           // Set up PDF text selection (reuses pdf.js' native selection so copy,
           // word selection and drag-to-pan keep working).
           const pageIndex = detail.index ?? 0;
 
           // Clean up previous selection handler for this doc if any
-          const prevCleanup = pdfSelectionCleanupRef.current.get(detail.doc);
+          const prevCleanup = pdfSelectionCleanupRef.current.get(pdfDoc);
           if (prevCleanup) prevCleanup();
 
           const cleanup = attachPdfTextSelection(
-            detail.doc,
-            () => pdfDocIndexRef.current.get(detail.doc!) ?? pageIndex,
+            pdfDoc,
+            () => pdfDocIndexRef.current.get(pdfDoc) ?? pageIndex,
             (result: PdfSelectionResult) => {
-              // detail.doc is guaranteed non-null here (checked above)
-              const doc = detail.doc!;
+              const doc = pdfDoc;
               // Build a fake CFI for PDF pages (page index encoded as /6/{2*(i+1)})
               const cfi = `epubcfi(/6/${(result.page + 1) * 2})`;
               // Compute selection rects in main window coordinates
@@ -2458,7 +2470,7 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
               onSelectionRef.current?.(bookSelection);
             },
           );
-          pdfSelectionCleanupRef.current.set(detail.doc, cleanup);
+          pdfSelectionCleanupRef.current.set(pdfDoc, cleanup);
         }
 
         // Inject ruby annotations if enabled for this book
@@ -2466,7 +2478,7 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
           try {
             const { useRubyStore } = await import("@readany/core/stores/ruby-store");
             const rubyMode = useRubyStore.getState().getBookRuby(bookKey);
-            if (rubyMode && rubyMode.startsWith("zh")) {
+            if (rubyMode?.startsWith("zh")) {
               const { isPinyinDictLoaded } = await import("@/lib/ruby/pinyin-processor");
               // Ensure dict is loaded into memory (may have been downloaded in a previous session)
               if (!isPinyinDictLoaded()) {
@@ -3131,7 +3143,7 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
         doc.addEventListener("selectstart", handleSelectStart);
         doc.addEventListener("selectionchange", handleSelectionChange);
       },
-      [bookKey],
+      [bookKey, isFixedLayout],
     );
 
     const getSelectionFromView = useCallback(
@@ -3228,6 +3240,10 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
     });
 
     // --- Open book ---
+    // Mount-only: re-running would reopen the book on every settings change.
+    // Guarded by isViewCreated; later settings/theme changes are applied by the
+    // dedicated effects below.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: mount-only book open, guarded by isViewCreated
     useEffect(() => {
       if (isViewCreated.current) return;
       isViewCreated.current = true;
@@ -3278,9 +3294,12 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
           const primaryColor =
             getComputedStyle(document.documentElement).getPropertyValue("--primary")?.trim() ||
             "#3b82f6";
-          if ((view as any).setSearchIndicator) {
-            (view as any).setSearchIndicator("outline", { color: primaryColor });
-          }
+          // foliate-js exposes setSearchIndicator on the view but its TS type is
+          // incomplete; narrow it instead of casting the whole view to any.
+          const searchHost = view as unknown as {
+            setSearchIndicator?: (type: string, options?: { color?: string }) => void;
+          };
+          searchHost.setSearchIndicator?.("outline", { color: primaryColor });
 
           console.log("[FoliateViewer] Book opened:", {
             format,
@@ -3374,10 +3393,12 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
           setViewReady(false);
         }
       };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     // --- Apply view settings changes ---
+    // Granular deps on purpose: re-applying styles is expensive, so only react
+    // to the fields that actually feed applyRendererStyles.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: granular style deps to avoid redundant iframe re-layout
     useEffect(() => {
       const view = viewRef.current;
       if (!view?.renderer) return;
@@ -3423,6 +3444,8 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
     }, [viewSettings, isFixedLayout, appTheme]);
 
     // --- Apply reflow layout changes ---
+    // Granular deps on purpose (see the style effect above).
+    // biome-ignore lint/correctness/useExhaustiveDependencies: granular layout deps to avoid redundant iframe re-layout
     useEffect(() => {
       const view = viewRef.current;
       if (!view?.renderer) return;
@@ -3442,6 +3465,7 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
     // once the new render settles. Zoom is covered by the settings dependency;
     // window/container resizes also trigger foliate's ResizeObserver -> #render,
     // so watch those too or highlights would disappear until the next page turn.
+    // biome-ignore lint/correctness/useExhaustiveDependencies: fixedLayoutZoom is a trigger dep — the zoom re-render is what needs repainting
     useEffect(() => {
       if (!isFixedLayout) return;
 
@@ -3538,6 +3562,10 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
     );
 
     return (
+      // Pointer taps are forwarded into the book iframe and keyboard paging is
+      // already handled by useBookShortcuts; adding a key handler here would
+      // fire twice for the same key.
+      // biome-ignore lint/a11y/useKeyWithClickEvents: keyboard paging handled by useBookShortcuts
       <div
         ref={containerRef}
         className="foliate-viewer h-full w-full focus:outline-none"
@@ -3580,12 +3608,13 @@ function syncRemoteFontStylesInDocument(doc: Document, urls: string[] | undefine
   if (!head) return;
   const nextUrls = Array.from(new Set((urls || []).filter(Boolean)));
 
-  Array.from(doc.querySelectorAll(`link[${REMOTE_FONT_LINK_ATTR}]`)).forEach((node) => {
+  const linksToDrop = Array.from(doc.querySelectorAll(`link[${REMOTE_FONT_LINK_ATTR}]`));
+  for (const node of linksToDrop) {
     const href = (node as HTMLLinkElement).href;
     if (!nextUrls.some((url) => href.includes(url))) {
       node.remove();
     }
-  });
+  }
 
   for (const url of nextUrls) {
     const existing = Array.from(doc.querySelectorAll(`link[${REMOTE_FONT_LINK_ATTR}]`)).find(

@@ -74,22 +74,22 @@ describe("JSON parsing resilience", () => {
 
       const result = tryParseAsQuestions(raw);
       expect(result).not.toBeNull();
-      expect(result!).toHaveLength(1);
-      expect(result![0].stem).toBe("What is 2+2?");
+      expect(result?.length).toBe(1);
+      expect(result?.[0]?.stem).toBe("What is 2+2?");
     });
 
     it("handles JSON wrapped in markdown fences", () => {
       const raw = '```json\n[{"type":"single_choice","stem":"Q1"}]\n```';
       const result = tryParseAsQuestions(raw);
       expect(result).not.toBeNull();
-      expect(result!).toHaveLength(1);
+      expect(result?.length).toBe(1);
     });
 
     it("wraps a single object in an array", () => {
       const raw = '{"type":"single_choice","stem":"Q1"}';
       const result = tryParseAsQuestions(raw);
       expect(result).not.toBeNull();
-      expect(result!).toHaveLength(1);
+      expect(result?.length).toBe(1);
     });
 
     it("handles extra unknown fields gracefully", () => {
@@ -112,10 +112,10 @@ describe("JSON parsing resilience", () => {
 
       const result = tryParseAsQuestions(raw);
       expect(result).not.toBeNull();
-      expect(result!).toHaveLength(1);
+      expect(result?.length).toBe(1);
       // extra fields are present in raw parse result but ignored by validation
-      expect(result![0].type).toBe("single_choice");
-      expect(result![0].stem).toBe("What is 2+2?");
+      expect(result?.[0]?.type).toBe("single_choice");
+      expect(result?.[0]?.stem).toBe("What is 2+2?");
     });
 
     it("handles wrong types for fields (returns partial results without throwing)", () => {
@@ -146,14 +146,14 @@ describe("JSON parsing resilience", () => {
       // tryParseAsQuestions should not throw even with malformed types
       const result = tryParseAsQuestions(raw);
       expect(result).not.toBeNull();
-      expect(result!.length).toBeGreaterThanOrEqual(1);
+      expect(result?.length).toBeGreaterThanOrEqual(1);
     });
 
     it("handles truncated / malformed JSON by extracting balanced arrays", () => {
       const raw = 'Some stray text [{"type":"single_choice","stem":"Q1"}] more text';
       const result = tryParseAsQuestions(raw);
       expect(result).not.toBeNull();
-      expect(result!).toHaveLength(1);
+      expect(result?.length).toBe(1);
     });
 
     it("handles completely empty string", () => {
@@ -195,9 +195,9 @@ describe("JSON parsing resilience", () => {
       );
 
       expect(question).not.toBeNull();
-      expect(question!.type).toBe("single_choice");
-      expect(question!.stem).toBe("What is 2+2?");
-      expect(question!.difficulty).toBe(1);
+      expect(question?.type).toBe("single_choice");
+      expect(question?.stem).toBe("What is 2+2?");
+      expect(question?.difficulty).toBe(1);
     });
 
     it("rejects a question with missing stem", () => {
@@ -209,7 +209,7 @@ describe("JSON parsing resilience", () => {
       };
 
       const question = validateAndMapQuestion(
-        raw as any,
+        raw as Parameters<typeof validateAndMapQuestion>[0],
         "session-1",
         defaultDifficulty,
         seenStems,
@@ -228,7 +228,7 @@ describe("JSON parsing resilience", () => {
       };
 
       const question = validateAndMapQuestion(
-        raw as any,
+        raw as Parameters<typeof validateAndMapQuestion>[0],
         "session-1",
         defaultDifficulty,
         seenStems,
@@ -259,7 +259,7 @@ describe("JSON parsing resilience", () => {
       );
 
       expect(question).not.toBeNull();
-      expect(question!.difficulty).toBe(defaultDifficulty);
+      expect(question?.difficulty).toBe(defaultDifficulty);
     });
 
     it("deduplicates by stem hash: second same stem is rejected", () => {
@@ -343,10 +343,10 @@ describe("quiz scoring logic", () => {
     expect(summary.gradableCount).toBe(7);
     expect(summary.correctCount).toBe(5);
     expect(summary.correctRate).toBeCloseTo(5 / 7, 5);
-    expect(summary.correctRateByType["single_choice"]).toBeCloseTo(0.6, 5);
-    expect(summary.correctRateByType["true_false"]).toBeCloseTo(1.0, 5);
+    expect(summary.correctRateByType.single_choice).toBeCloseTo(0.6, 5);
+    expect(summary.correctRateByType.true_false).toBeCloseTo(1.0, 5);
     // Short answers have no auto-graded denominator.
-    expect(summary.correctRateByType["short_answer"]).toBe(0);
+    expect(summary.correctRateByType.short_answer).toBe(0);
   });
 
   it("reports unanswered short answers as pending instead of wrong", () => {
@@ -395,7 +395,7 @@ describe("quiz template configs", () => {
     expect(dailyConfig.type).toBe("daily");
     expect(dailyConfig.questionCount).toBe(10);
     expect(dailyConfig.timeRange).toBeDefined();
-    expect(dailyConfig.timeRange!.end - dailyConfig.timeRange!.start).toBe(sevenDaysMs);
+    expect(dailyConfig.timeRange?.end - (dailyConfig.timeRange?.start ?? 0)).toBe(sevenDaysMs);
     expect(dailyConfig.difficulty).toBeGreaterThanOrEqual(1);
     expect(dailyConfig.difficulty).toBeLessThanOrEqual(2);
   });
@@ -416,7 +416,7 @@ describe("quiz template configs", () => {
     expect(monthlyConfig.type).toBe("monthly");
     expect(monthlyConfig.questionCount).toBe(50);
     expect(monthlyConfig.timeRange).toBeDefined();
-    expect(monthlyConfig.timeRange!.end - monthlyConfig.timeRange!.start).toBe(thirtyDaysMs);
+    expect(monthlyConfig.timeRange?.end - (monthlyConfig.timeRange?.start ?? 0)).toBe(thirtyDaysMs);
     expect(monthlyConfig.difficulty).toBeGreaterThanOrEqual(1);
     expect(monthlyConfig.difficulty).toBeLessThanOrEqual(3);
   });

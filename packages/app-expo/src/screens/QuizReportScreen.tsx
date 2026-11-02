@@ -18,7 +18,9 @@ import { buildQuizReport } from "@readany/core/quiz/report-builder";
 import { useQuizStore } from "@readany/core/stores/quiz-store";
 import { useSettingsStore } from "@readany/core/stores/settings-store";
 import type { QuizReport, QuizSession } from "@readany/core/types/quiz";
+import type { TFunction } from "i18next";
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   Alert,
@@ -34,24 +36,30 @@ import { SafeAreaView } from "react-native-safe-area-context";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TYPE_LABELS: Record<string, string> = {
-  single_choice: "单选",
-  multi_choice: "多选",
-  true_false: "判断",
-  short_answer: "简答",
+const TYPE_LABEL_KEYS: Record<string, string> = {
+  single_choice: "quiz.badgeSingle",
+  multi_choice: "quiz.badgeMulti",
+  true_false: "quiz.badgeTrueFalse",
+  short_answer: "quiz.badgeShort",
 };
 
 /** `timeSpent` is stored in seconds (same unit as the desktop report). */
-function formatDuration(seconds: number): string {
+function formatDuration(seconds: number, t: TFunction): string {
   const totalSeconds = Math.max(0, Math.floor(seconds));
   const min = Math.floor(totalSeconds / 60);
   const sec = totalSeconds % 60;
-  if (min > 0) return `${min}分${sec}秒`;
-  return `${sec}秒`;
+  if (min > 0) {
+    return t("quiz.durationMinutes", {
+      minutes: min,
+      seconds: sec,
+      defaultValue: `${min}m ${sec}s`,
+    });
+  }
+  return t("quiz.durationSeconds", { count: sec, defaultValue: `${sec}s` });
 }
 
 function formatDate(ts: number): string {
-  return new Date(ts).toLocaleDateString("zh-CN", {
+  return new Date(ts).toLocaleDateString(undefined, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -66,11 +74,11 @@ function scoreColor(rate: number): string {
   return "#ef4444";
 }
 
-function scoreLabel(rate: number): string {
-  if (rate >= 0.9) return "优秀";
-  if (rate >= 0.8) return "良好";
-  if (rate >= 0.6) return "一般";
-  return "需努力";
+function scoreLabel(rate: number, t: TFunction): string {
+  if (rate >= 0.9) return t("quiz.gradeExcellent", "Excellent");
+  if (rate >= 0.8) return t("quiz.gradeGood", "Good");
+  if (rate >= 0.6) return t("quiz.gradeFair", "Fair");
+  return t("quiz.gradePoor", "Needs work");
 }
 
 // ---------------------------------------------------------------------------
@@ -84,6 +92,7 @@ export default function QuizReportScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, "QuizReport">>();
   const { sessionId } = route.params;
+  const { t } = useTranslation();
 
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState<QuizSession | null>(null);
@@ -108,7 +117,7 @@ export default function QuizReportScreen() {
     if (!session) return;
     const { aiConfig } = useSettingsStore.getState();
     if (!hasUsableAIConfig(aiConfig)) {
-      Alert.alert("未配置 AI", "请先在设置中配置 AI 端点与模型。");
+      Alert.alert(t("quiz.noAITitle", "AI not configured"), t("quiz.errorNoAIConfig"));
       return;
     }
     try {
@@ -119,9 +128,12 @@ export default function QuizReportScreen() {
       }
     } catch (err) {
       console.error("[QuizReport] restart:", err);
-      Alert.alert("生成测验失败", getQuizFailureMessage(err));
+      Alert.alert(
+        t("quiz.generationFailedTitle", "Quiz generation failed"),
+        getQuizFailureMessage(err, t),
+      );
     }
-  }, [session, nav]);
+  }, [session, nav, t]);
 
   // -- Render helpers -------------------------------------------------------
 
@@ -139,7 +151,7 @@ export default function QuizReportScreen() {
             <Text style={s.scoreUnit}>%</Text>
           </View>
           <View style={[s.scoreLabelBadge, { backgroundColor: `${c}20` }]}>
-            <Text style={[s.scoreLabelText, { color: c }]}>{scoreLabel(rate)}</Text>
+            <Text style={[s.scoreLabelText, { color: c }]}>{scoreLabel(rate, t)}</Text>
           </View>
         </View>
 
@@ -149,29 +161,29 @@ export default function QuizReportScreen() {
             <Text style={s.scoreStatValue}>
               {summary.correctCount}/{summary.gradableCount}
             </Text>
-            <Text style={s.scoreStatLabel}>正确</Text>
+            <Text style={s.scoreStatLabel}>{t("quiz.correctCount", "Correct")}</Text>
           </View>
           <View style={s.scoreStatItem}>
             <ClockIcon size={16} color={colors.blue} />
-            <Text style={s.scoreStatValue}>{formatDuration(summary.timeSpent)}</Text>
-            <Text style={s.scoreStatLabel}>用时</Text>
+            <Text style={s.scoreStatValue}>{formatDuration(summary.timeSpent, t)}</Text>
+            <Text style={s.scoreStatLabel}>{t("quiz.timeSpent", "Time Spent")}</Text>
           </View>
           <View style={s.scoreStatItem}>
             <TrophyIcon size={16} color={colors.amber} />
             <Text style={s.scoreStatValue}>{session?.score ?? 0}</Text>
-            <Text style={s.scoreStatLabel}>得分</Text>
+            <Text style={s.scoreStatLabel}>{t("quiz.score", "Score")}</Text>
           </View>
         </View>
 
         {session && (
           <Text style={s.sessionMeta}>
             {session.type === "daily"
-              ? "每日测验"
+              ? t("quiz.daily")
               : session.type === "monthly"
-                ? "月度测验"
+                ? t("quiz.monthly")
                 : session.type === "quarterly"
-                  ? "季度测验"
-                  : "自定义测验"}
+                  ? t("quiz.quarterly")
+                  : t("quiz.custom")}
             {" · "}
             {formatDate(session.createdAt)}
           </Text>
@@ -179,7 +191,7 @@ export default function QuizReportScreen() {
 
         {summary.pendingCount > 0 && (
           <Text style={[s.sessionMeta, { color: colors.amber }]}>
-            待批改（简答题）：{summary.pendingCount} 题
+            {t("quiz.pendingGradingCount", { count: summary.pendingCount })}
           </Text>
         )}
 
@@ -195,7 +207,7 @@ export default function QuizReportScreen() {
           onPress={() => void handleRestart()}
         >
           <Text style={{ color: colors.primaryForeground, fontWeight: fontWeight.semibold }}>
-            再来一次
+            {t("quiz.restart", "Try again")}
           </Text>
         </TouchableOpacity>
       </View>
@@ -210,14 +222,16 @@ export default function QuizReportScreen() {
 
     return (
       <View style={s.section}>
-        <Text style={s.sectionTitle}>题型分析</Text>
+        <Text style={s.sectionTitle}>{t("quiz.perTypeAccuracy", "Accuracy by type")}</Text>
         <View style={s.breakdownGrid}>
           {types.map((type) => {
             const rate = correctRateByType[type];
             const c = scoreColor(rate);
             return (
               <View key={type} style={s.breakdownItem}>
-                <Text style={s.breakdownType}>{TYPE_LABELS[type] ?? type}</Text>
+                <Text style={s.breakdownType}>
+                  {TYPE_LABEL_KEYS[type] ? t(TYPE_LABEL_KEYS[type]) : type}
+                </Text>
                 <View style={s.breakdownBarBg}>
                   <View
                     style={[
@@ -243,12 +257,14 @@ export default function QuizReportScreen() {
 
     return (
       <View style={s.section}>
-        <Text style={s.sectionTitle}>薄弱环节</Text>
+        <Text style={s.sectionTitle}>{t("quiz.weakAreas", "Weak Areas")}</Text>
         {report.weakAreas.slice(0, 5).map((area) => (
           <View key={area.tag} style={s.weakCard}>
             <View style={s.weakInfo}>
               <Text style={s.weakTag}>{area.tag}</Text>
-              <Text style={s.weakCount}>{area.questionCount} 题</Text>
+              <Text style={s.weakCount}>
+                {t("quiz.questionCountShort", { count: area.questionCount })}
+              </Text>
             </View>
             <View style={s.weakBarWrap}>
               <View style={s.weakBarBg}>
@@ -262,7 +278,9 @@ export default function QuizReportScreen() {
                   ]}
                 />
               </View>
-              <Text style={s.weakRate}>{Math.round(area.errorRate * 100)}% 错误率</Text>
+              <Text style={s.weakRate}>
+                {t("quiz.errorRate", { rate: `${Math.round(area.errorRate * 100)}%` })}
+              </Text>
             </View>
           </View>
         ))}
@@ -277,10 +295,12 @@ export default function QuizReportScreen() {
     return (
       <View style={s.section}>
         <View style={s.sectionHeader}>
-          <Text style={s.sectionTitle}>题目回顾</Text>
+          <Text style={s.sectionTitle}>{t("quiz.questionReview", "Question review")}</Text>
           <TouchableOpacity onPress={() => setReviewMode(!reviewMode)}>
             <Text style={s.reviewToggle}>
-              {reviewMode ? "收起" : `查看全部 (${questions.length})`}
+              {reviewMode
+                ? t("quiz.collapse", "Collapse")
+                : t("quiz.viewAll", { count: questions.length })}
             </Text>
           </TouchableOpacity>
         </View>
@@ -291,7 +311,9 @@ export default function QuizReportScreen() {
               <View style={s.reviewHeader}>
                 <Text style={s.reviewIndex}>#{idx + 1}</Text>
                 <View style={[s.typeBadge, { backgroundColor: colors.muted }]}>
-                  <Text style={s.reviewType}>{TYPE_LABELS[q.type] ?? q.type}</Text>
+                  <Text style={s.reviewType}>
+                    {TYPE_LABEL_KEYS[q.type] ? t(TYPE_LABEL_KEYS[q.type]) : q.type}
+                  </Text>
                 </View>
                 {q.isCorrect === true ? (
                   <CheckIcon size={14} color="#10b981" />
@@ -304,13 +326,13 @@ export default function QuizReportScreen() {
               </Text>
               {q.userAnswer !== undefined && (
                 <Text style={s.reviewAnswer}>
-                  你的答案:{" "}
+                  {t("quiz.yourAnswer", "Your answer")}:{" "}
                   {Array.isArray(q.userAnswer) ? q.userAnswer.join(", ") : String(q.userAnswer)}
                 </Text>
               )}
               {q.isCorrect === false && (
                 <Text style={s.reviewCorrect}>
-                  正确答案:{" "}
+                  {t("quiz.correctAnswer", "Correct answer")}:{" "}
                   {Array.isArray(q.answer.correct)
                     ? q.answer.correct.join(", ")
                     : String(q.answer.correct)}
@@ -343,12 +365,14 @@ export default function QuizReportScreen() {
             <TouchableOpacity style={s.backBtn} onPress={() => nav.goBack()}>
               <ChevronLeftIcon size={20} color={colors.foreground} />
             </TouchableOpacity>
-            <Text style={s.headerTitle}>测验报告</Text>
+            <Text style={s.headerTitle}>{t("quiz.reportTitle", "Quiz Report")}</Text>
             <View style={{ width: 28 }} />
           </View>
         </View>
         <View style={s.loadingWrap}>
-          <Text style={s.emptyText}>报告数据不可用</Text>
+          <Text style={s.emptyText}>
+            {t("quiz.reportUnavailable", "Report data is unavailable.")}
+          </Text>
         </View>
       </SafeAreaView>
     );
@@ -362,7 +386,7 @@ export default function QuizReportScreen() {
           <TouchableOpacity style={s.backBtn} onPress={() => nav.goBack()}>
             <ChevronLeftIcon size={20} color={colors.foreground} />
           </TouchableOpacity>
-          <Text style={s.headerTitle}>测验报告</Text>
+          <Text style={s.headerTitle}>{t("quiz.reportTitle", "Quiz Report")}</Text>
           <View style={{ width: 28 }} />
         </View>
       </View>

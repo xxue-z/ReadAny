@@ -262,7 +262,7 @@ export function DocumentEditorScreen() {
       } catch (err) {
         console.warn("[DocumentEditor] Save failed:", err);
         if (!options?.silent) {
-          Alert.alert(t("library.editor.saveError", "保存失败"), String(err));
+          Alert.alert(t("library.editor.saveError", "Save failed"), String(err));
         }
         return false;
       }
@@ -315,13 +315,19 @@ export function DocumentEditorScreen() {
   const handleSave = useCallback(async () => {
     if (isSaving) return;
     if (!markdown.trim()) {
-      Alert.alert("无法保存", "文档内容为空，至少写入一行文字后再保存。");
+      Alert.alert(
+        t("library.editor.emptyTitle", "Cannot save"),
+        t(
+          "library.editor.emptyBody",
+          "The document is empty. Write at least one line before saving.",
+        ),
+      );
       return;
     }
     setIsSaving(true);
     try {
       const saved = await persist(markdown);
-      if (saved) Alert.alert("", t("library.editor.saved", "已保存"));
+      if (saved) Alert.alert("", t("library.editor.saved", "Saved"));
     } finally {
       setIsSaving(false);
     }
@@ -358,7 +364,7 @@ export function DocumentEditorScreen() {
           <ChevronLeftIcon size={20} color={colors.foreground} />
         </TouchableOpacity>
         <Text style={s.headerTitle} numberOfLines={1}>
-          {book?.meta.title || t("library.editor.title", "编辑文档")}
+          {book?.meta.title || t("library.editor.title", "Edit Document")}
         </Text>
         <View style={s.headerActions}>
           <TouchableOpacity

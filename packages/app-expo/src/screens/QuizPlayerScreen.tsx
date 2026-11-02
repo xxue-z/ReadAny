@@ -16,6 +16,7 @@ import { answersEqual } from "@readany/core/quiz/scoring";
 import { useQuizStore } from "@readany/core/stores/quiz-store";
 import type { QuestionType } from "@readany/core/types/quiz";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   Alert,
@@ -35,11 +36,11 @@ import { SafeAreaView } from "react-native-safe-area-context";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TYPE_BADGES: Record<QuestionType, { label: string; color: string }> = {
-  single_choice: { label: "单选", color: "#6366f1" },
-  multi_choice: { label: "多选", color: "#7c3aed" },
-  true_false: { label: "判断", color: "#f59e0b" },
-  short_answer: { label: "简答", color: "#10b981" },
+const TYPE_BADGES: Record<QuestionType, { labelKey: string; color: string }> = {
+  single_choice: { labelKey: "quiz.badgeSingle", color: "#6366f1" },
+  multi_choice: { labelKey: "quiz.badgeMulti", color: "#7c3aed" },
+  true_false: { labelKey: "quiz.badgeTrueFalse", color: "#f59e0b" },
+  short_answer: { labelKey: "quiz.badgeShort", color: "#10b981" },
 };
 
 function formatTimer(s: number): string {
@@ -59,6 +60,7 @@ export default function QuizPlayerScreen() {
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, "QuizPlayer">>();
   const { sessionId } = route.params;
+  const { t } = useTranslation();
 
   // Store
   const {
@@ -91,7 +93,10 @@ export default function QuizPlayerScreen() {
       .then(() => setElapsed(useQuizStore.getState().currentSession?.timeSpent ?? 0))
       .catch((err) => {
         console.error("[QuizPlayer] loadSession:", err);
-        Alert.alert("错误", "加载测验失败");
+        Alert.alert(
+          t("quiz.errorTitle", "Error"),
+          t("quiz.loadQuizFailed", "Failed to load the quiz."),
+        );
         nav.goBack();
       })
       .finally(() => setLoading(false));
@@ -185,23 +190,30 @@ export default function QuizPlayerScreen() {
   const handleComplete = useCallback(async () => {
     const unanswered = currentQuestions.filter((q) => q.userAnswer === undefined);
     if (unanswered.length > 0) {
-      Alert.alert("未完成", `还有 ${unanswered.length} 题未作答，确定提交吗？`, [
-        { text: "继续作答", style: "cancel" },
-        {
-          text: "确定提交",
-          onPress: async () => {
-            setSubmitting(true);
-            try {
-              await completeQuiz(elapsed);
-              nav.replace("QuizReport", { sessionId });
-            } catch (err) {
-              console.error("[QuizPlayer] completeQuiz:", err);
-            } finally {
-              setSubmitting(false);
-            }
+      Alert.alert(
+        t("quiz.incompleteTitle", "Unfinished"),
+        t("quiz.incompleteBody", {
+          count: unanswered.length,
+          defaultValue: `${unanswered.length} question(s) left unanswered. Submit anyway?`,
+        }),
+        [
+          { text: t("quiz.keepAnswering", "Keep answering"), style: "cancel" },
+          {
+            text: t("quiz.submitAnyway", "Submit anyway"),
+            onPress: async () => {
+              setSubmitting(true);
+              try {
+                await completeQuiz(elapsed);
+                nav.replace("QuizReport", { sessionId });
+              } catch (err) {
+                console.error("[QuizPlayer] completeQuiz:", err);
+              } finally {
+                setSubmitting(false);
+              }
+            },
           },
-        },
-      ]);
+        ],
+      );
       return;
     }
 
@@ -211,11 +223,14 @@ export default function QuizPlayerScreen() {
       nav.replace("QuizReport", { sessionId });
     } catch (err) {
       console.error("[QuizPlayer] completeQuiz:", err);
-      Alert.alert("错误", "提交失败");
+      Alert.alert(
+        t("quiz.errorTitle", "Error"),
+        t("quiz.submitFailed", "Failed to submit the quiz."),
+      );
     } finally {
       setSubmitting(false);
     }
-  }, [currentQuestions, completeQuiz, nav, sessionId, elapsed]);
+  }, [currentQuestions, completeQuiz, nav, sessionId, elapsed, t]);
 
   // -- Render ---------------------------------------------------------------
 
@@ -233,7 +248,7 @@ export default function QuizPlayerScreen() {
     return (
       <SafeAreaView style={[s.container, { backgroundColor: colors.background }]} edges={["top"]}>
         <View style={s.emptyWrap}>
-          <Text style={s.emptyText}>没有题目</Text>
+          <Text style={s.emptyText}>{t("quiz.noQuestionsToShow", "No questions to show")}</Text>
           <TouchableOpacity
             style={[s.showAnswerBtn, { borderColor: colors.primary, marginTop: 16 }]}
             onPress={() => {
@@ -241,7 +256,9 @@ export default function QuizPlayerScreen() {
               nav.goBack();
             }}
           >
-            <Text style={[s.showAnswerBtnText, { color: colors.primary }]}>返回测验</Text>
+            <Text style={[s.showAnswerBtnText, { color: colors.primary }]}>
+              {t("quiz.backToQuiz", "Back to quiz")}
+            </Text>
           </TouchableOpacity>
         </View>
       </SafeAreaView>
@@ -295,7 +312,7 @@ export default function QuizPlayerScreen() {
       {/* Type badge */}
       <View style={[s.headerInner, { paddingVertical: 8 }]}>
         <View style={[s.typeBadge, { backgroundColor: `${typeBadge.color}20` }]}>
-          <Text style={[s.typeBadgeText, { color: typeBadge.color }]}>{typeBadge.label}</Text>
+          <Text style={[s.typeBadgeText, { color: typeBadge.color }]}>{t(typeBadge.labelKey)}</Text>
         </View>
       </View>
 
@@ -309,13 +326,13 @@ export default function QuizPlayerScreen() {
             {hasAnswered ? (
               <>
                 <Text style={s.shortAnswerPlaceholder}>
-                  你的回答: {String(question.userAnswer ?? "")}
+                  {t("quiz.yourAnswer", "Your answer")}: {String(question.userAnswer ?? "")}
                 </Text>
                 <Text style={[s.shortAnswerPlaceholder, { marginTop: 10 }]}>
-                  参考答案: {String(correctAnswer)}
+                  {t("quiz.referenceAnswer", "Reference answer")}: {String(correctAnswer)}
                 </Text>
                 <Text style={[s.shortAnswerPlaceholder, { marginTop: 10, opacity: 0.7 }]}>
-                  简答题需人工评分，不计入自动得分。
+                  {t("quiz.shortAnswerManual", "Short answers are graded manually.")}
                 </Text>
               </>
             ) : (
@@ -323,7 +340,7 @@ export default function QuizPlayerScreen() {
                 <TextInput
                   value={shortAnswerText}
                   onChangeText={setShortAnswerText}
-                  placeholder="输入你的回答..."
+                  placeholder={t("quiz.shortAnswerPlaceholder", "Type your answer...")}
                   placeholderTextColor={colors.mutedForeground}
                   multiline
                   style={{
@@ -348,7 +365,9 @@ export default function QuizPlayerScreen() {
                     setShowExplanation(true);
                   }}
                 >
-                  <Text style={[s.showAnswerBtnText, { color: colors.primary }]}>提交回答</Text>
+                  <Text style={[s.showAnswerBtnText, { color: colors.primary }]}>
+                    {t("quiz.submitAnswer", "Submit answer")}
+                  </Text>
                 </TouchableOpacity>
               </>
             )}
@@ -356,8 +375,8 @@ export default function QuizPlayerScreen() {
         ) : question.type === "true_false" ? (
           <View style={s.optionsWrap}>
             {[
-              { key: "true", label: "✓ 正确" },
-              { key: "false", label: "✗ 错误" },
+              { key: "true", label: `✓ ${t("quiz.trueLabel", "True")}` },
+              { key: "false", label: `✗ ${t("quiz.falseLabel", "False")}` },
             ].map((opt) => {
               const isSelected = selectedKeys.includes(opt.key);
               const isCorrectOpt = answersEqual(question, String(correctAnswer), opt.key);
@@ -475,7 +494,12 @@ export default function QuizPlayerScreen() {
             {isMultiChoice && !hasAnswered && selectedKeys.length > 0 && (
               <TouchableOpacity style={s.confirmMultiBtn} onPress={handleConfirmMulti}>
                 <CheckCheckIcon size={16} color={colors.primaryForeground} />
-                <Text style={s.confirmMultiText}>确认多选 ({selectedKeys.length})</Text>
+                <Text style={s.confirmMultiText}>
+                  {t("quiz.confirmSelection", {
+                    count: selectedKeys.length,
+                    defaultValue: `Confirm selection (${selectedKeys.length})`,
+                  })}
+                </Text>
               </TouchableOpacity>
             )}
           </View>
@@ -492,10 +516,10 @@ export default function QuizPlayerScreen() {
               ]}
             >
               <Text style={[s.explanationBadgeText, { color: isCorrect ? "#10b981" : "#ef4444" }]}>
-                {isCorrect ? "回答正确" : "回答错误"}
+                {isCorrect ? t("quiz.answerCorrect") : t("quiz.answerIncorrect")}
               </Text>
             </View>
-            <Text style={s.explanationLabel}>解析</Text>
+            <Text style={s.explanationLabel}>{t("quiz.explanation")}</Text>
             <Text style={s.explanationText}>{question.answer.explanation}</Text>
           </View>
         )}
@@ -519,12 +543,12 @@ export default function QuizPlayerScreen() {
                 currentQuestionIndex === 0 && { color: colors.mutedForeground },
               ]}
             >
-              上一题
+              {t("quiz.prevQuestion", "Previous")}
             </Text>
           </TouchableOpacity>
 
           {/* Completing is only offered on the last question: since answers no longer
-              auto-advance, a "提交" button mid-quiz would end the quiz while the
+              auto-advance, a submit button mid-quiz would end the quiz while the
               user just wanted to move on. */}
           {currentQuestionIndex >= totalQuestions - 1 && (
             <TouchableOpacity
@@ -535,7 +559,7 @@ export default function QuizPlayerScreen() {
               {submitting ? (
                 <ActivityIndicator size="small" color={colors.primaryForeground} />
               ) : (
-                <Text style={s.completeBtnText}>完成</Text>
+                <Text style={s.completeBtnText}>{t("quiz.complete", "Finish Quiz")}</Text>
               )}
             </TouchableOpacity>
           )}
@@ -551,7 +575,7 @@ export default function QuizPlayerScreen() {
                 currentQuestionIndex >= totalQuestions - 1 && { color: colors.mutedForeground },
               ]}
             >
-              下一题
+              {t("quiz.nextQuestion", "Next")}
             </Text>
             <ChevronRightIcon
               size={16}

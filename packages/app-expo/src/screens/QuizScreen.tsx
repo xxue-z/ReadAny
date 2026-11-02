@@ -45,27 +45,27 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 type SubTab = "daily" | "custom" | "bank";
 
-const SUB_TABS: { key: SubTab; label: string }[] = [
-  { key: "daily", label: "今日测验" },
-  { key: "custom", label: "自定义测验" },
-  { key: "bank", label: "题库" },
+const SUB_TABS: { key: SubTab; labelKey: string }[] = [
+  { key: "daily", labelKey: "quiz.daily" },
+  { key: "custom", labelKey: "quiz.custom" },
+  { key: "bank", labelKey: "quiz.questionBank" },
 ];
 
-const DIFFICULTY_LABELS: Record<number, string> = {
-  1: "简单",
-  2: "中等",
-  3: "困难",
+const DIFFICULTY_LABEL_KEYS: Record<number, string> = {
+  1: "quiz.easy",
+  2: "quiz.medium",
+  3: "quiz.hard",
 };
 
-function statusBadge(status: string): { label: string; color: string } {
+function statusBadge(status: string): { labelKey: string; color: string } {
   switch (status) {
     case "in_progress":
-      return { label: "进行中", color: "#3b82f6" };
+      return { labelKey: "quiz.dailyInProgressShort", color: "#3b82f6" };
     case "graded":
     case "completed":
-      return { label: "已完成", color: "#10b981" };
+      return { labelKey: "quiz.statusCompleted", color: "#10b981" };
     default:
-      return { label: "待开始", color: "#7c7c82" };
+      return { labelKey: "quiz.statusPending", color: "#7c7c82" };
   }
 }
 
@@ -78,7 +78,7 @@ export default function QuizScreen() {
   const s = makeStyles(colors);
   const layout = useResponsiveLayout();
   const nav = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  useTranslation();
+  const { t } = useTranslation();
 
   // Store
   const store = useQuizStore();
@@ -129,7 +129,13 @@ export default function QuizScreen() {
         (s) => s.type === "daily" && s.createdAt >= startOfDay,
       );
       if (todaysDaily?.status === "graded") {
-        Alert.alert("今日测验已完成", "可以明天再来，或使用「自定义测验」再练一次。");
+        Alert.alert(
+          t("quiz.dailyCompletedTitle", "Today's quiz is done"),
+          t(
+            "quiz.dailyCompletedBody",
+            "Come back tomorrow, or use a custom quiz for more practice.",
+          ),
+        );
         return;
       }
       if (todaysDaily?.status === "in_progress") {
@@ -140,7 +146,7 @@ export default function QuizScreen() {
 
       const { aiConfig } = useSettingsStore.getState();
       if (!hasUsableAIConfig(aiConfig)) {
-        Alert.alert("未配置 AI", "请先在设置中配置 AI 端点与模型。");
+        Alert.alert(t("quiz.noAITitle", "AI not configured"), t("quiz.errorNoAIConfig"));
         return;
       }
 
@@ -161,13 +167,19 @@ export default function QuizScreen() {
       if (sessionId) {
         nav.navigate("QuizPlayer", { sessionId });
       } else {
-        Alert.alert("生成失败", "没有生成任何题目，请稍后重试。");
+        Alert.alert(
+          t("quiz.generationFailedTitle", "Quiz generation failed"),
+          t("quiz.generationFailedBody", "No questions were generated. Please try again later."),
+        );
       }
     } catch (err) {
-      Alert.alert("生成测验失败", getQuizFailureMessage(err));
+      Alert.alert(
+        t("quiz.generationFailedTitle", "Quiz generation failed"),
+        getQuizFailureMessage(err, t),
+      );
       console.error("[Quiz] startDailyQuiz:", err);
     }
-  }, [nav]);
+  }, [nav, t]);
 
   const startCustomQuiz = useCallback(async () => {
     try {
@@ -179,7 +191,7 @@ export default function QuizScreen() {
 
       const { aiConfig } = useSettingsStore.getState();
       if (!hasUsableAIConfig(aiConfig)) {
-        Alert.alert("未配置 AI", "请先在设置中配置 AI 端点与模型。");
+        Alert.alert(t("quiz.noAITitle", "AI not configured"), t("quiz.errorNoAIConfig"));
         return;
       }
 
@@ -196,14 +208,21 @@ export default function QuizScreen() {
       if (sessionId) {
         nav.navigate("QuizPlayer", { sessionId });
       } else {
-        Alert.alert("生成失败", "没有生成任何题目，请稍后重试。");
+        Alert.alert(
+          t("quiz.generationFailedTitle", "Quiz generation failed"),
+          t("quiz.generationFailedBody", "No questions were generated. Please try again later."),
+        );
       }
     } catch (err) {
-      Alert.alert("生成测验失败", getQuizFailureMessage(err));
+      Alert.alert(
+        t("quiz.generationFailedTitle", "Quiz generation failed"),
+        getQuizFailureMessage(err, t),
+      );
       console.error("[Quiz] startCustomQuiz:", err);
     }
   }, [
     nav,
+    t,
     customType,
     customCount,
     customDifficulty,
@@ -221,11 +240,14 @@ export default function QuizScreen() {
         await useQuizStore.getState().loadSession(session.id);
         nav.navigate("QuizPlayer", { sessionId: session.id });
       } catch (err) {
-        Alert.alert("错误", "加载测验失败");
+        Alert.alert(
+          t("quiz.errorTitle", "Error"),
+          t("quiz.loadQuizFailed", "Failed to load the quiz."),
+        );
         console.error("[Quiz] resumeSession:", err);
       }
     },
-    [nav],
+    [nav, t],
   );
 
   const viewReport = useCallback(
@@ -265,13 +287,13 @@ export default function QuizScreen() {
         <View style={s.dailyCardHeader}>
           <BrainIcon size={28} color={colors.primary} />
           <View style={s.dailyCardTitleWrap}>
-            <Text style={s.dailyCardTitle}>今日测验</Text>
+            <Text style={s.dailyCardTitle}>{t("quiz.daily")}</Text>
             <Text style={s.dailyCardSubtitle}>
               {todaySession
                 ? todaySession.status === "graded"
-                  ? `已完成 · 得分 ${todaySession.score ?? 0}`
-                  : "进行中"
-                : "还未开始今日测验"}
+                  ? t("quiz.completedWithScore", { score: todaySession.score ?? 0 })
+                  : t("quiz.dailyInProgressShort")
+                : t("quiz.dailyNotStarted")}
             </Text>
           </View>
         </View>
@@ -287,7 +309,7 @@ export default function QuizScreen() {
             <>
               <PlayIcon size={16} color={colors.primaryForeground} />
               <Text style={s.startBtnText}>
-                {todaySession?.status === "in_progress" ? "继续测验" : "开始测验"}
+                {todaySession?.status === "in_progress" ? t("quiz.resume") : t("quiz.start")}
               </Text>
             </>
           )}
@@ -299,25 +321,25 @@ export default function QuizScreen() {
         <View style={s.statCard}>
           <TrophyIcon size={20} color={colors.amber} />
           <Text style={s.statValue}>{weeklyCompleted}</Text>
-          <Text style={s.statLabel}>本周完成</Text>
+          <Text style={s.statLabel}>{t("quiz.weekCompleted")}</Text>
         </View>
         <View style={s.statCard}>
           <BarChart3Icon size={20} color={colors.indigo} />
           <Text style={s.statValue}>{weeklyAvgScore}</Text>
-          <Text style={s.statLabel}>平均分</Text>
+          <Text style={s.statLabel}>{t("quiz.averageScore")}</Text>
         </View>
         <View style={s.statCard}>
           <TrendingUpIcon size={20} color={colors.emerald} />
           <Text style={s.statValue}>{recentSessions.length}</Text>
-          <Text style={s.statLabel}>总次数</Text>
+          <Text style={s.statLabel}>{t("quiz.totalCount")}</Text>
         </View>
       </View>
 
       {/* Recent sessions */}
-      <Text style={s.sectionTitle}>最近测验</Text>
+      <Text style={s.sectionTitle}>{t("quiz.recentSessions")}</Text>
       {recentSessions.length === 0 ? (
         <View style={s.emptyWrap}>
-          <Text style={s.emptyText}>暂无测验记录</Text>
+          <Text style={s.emptyText}>{t("quiz.noSessions")}</Text>
         </View>
       ) : (
         recentSessions.slice(0, 10).map((session) => (
@@ -336,20 +358,24 @@ export default function QuizScreen() {
               <View style={s.sessionInfo}>
                 <Text style={s.sessionType}>
                   {session.type === "daily"
-                    ? "每日测验"
+                    ? t("quiz.daily")
                     : session.type === "monthly"
-                      ? "月度测验"
+                      ? t("quiz.monthly")
                       : session.type === "quarterly"
-                        ? "季度测验"
-                        : "自定义测验"}
+                        ? t("quiz.quarterly")
+                        : t("quiz.custom")}
                 </Text>
                 <Text style={s.sessionDate}>
-                  {new Date(session.createdAt).toLocaleDateString("zh-CN")}
+                  {new Date(session.createdAt).toLocaleDateString()}
                 </Text>
               </View>
             </View>
             <View style={s.sessionRight}>
-              {session.score != null && <Text style={s.sessionScore}>{session.score}分</Text>}
+              {session.score != null && (
+                <Text style={s.sessionScore}>
+                  {t("quiz.scorePoints", { score: session.score })}
+                </Text>
+              )}
               <View
                 style={[
                   s.statusBadge,
@@ -357,7 +383,7 @@ export default function QuizScreen() {
                 ]}
               >
                 <Text style={[s.statusBadgeText, { color: statusBadge(session.status).color }]}>
-                  {statusBadge(session.status).label}
+                  {t(statusBadge(session.status).labelKey)}
                 </Text>
               </View>
               <ChevronRightIcon size={14} color={colors.mutedForeground} />
@@ -375,29 +401,29 @@ export default function QuizScreen() {
       showsVerticalScrollIndicator={false}
     >
       {/* Type */}
-      <Text style={s.fieldLabel}>测验类型</Text>
+      <Text style={s.fieldLabel}>{t("quiz.quizType")}</Text>
       <View style={s.typeRow}>
-        {(["daily", "monthly", "quarterly", "custom"] as const).map((t) => (
+        {(["daily", "monthly", "quarterly", "custom"] as const).map((quizType) => (
           <TouchableOpacity
-            key={t}
-            style={[s.typeChip, customType === t && s.typeChipActive]}
-            onPress={() => setCustomType(t)}
+            key={quizType}
+            style={[s.typeChip, customType === quizType && s.typeChipActive]}
+            onPress={() => setCustomType(quizType)}
           >
-            <Text style={[s.typeChipText, customType === t && s.typeChipTextActive]}>
-              {t === "daily"
-                ? "每日"
-                : t === "monthly"
-                  ? "月度"
-                  : t === "quarterly"
-                    ? "季度"
-                    : "自定义"}
+            <Text style={[s.typeChipText, customType === quizType && s.typeChipTextActive]}>
+              {quizType === "daily"
+                ? t("quiz.daily")
+                : quizType === "monthly"
+                  ? t("quiz.monthly")
+                  : quizType === "quarterly"
+                    ? t("quiz.quarterly")
+                    : t("quiz.custom")}
             </Text>
           </TouchableOpacity>
         ))}
       </View>
 
       {/* Question count */}
-      <Text style={s.fieldLabel}>题目数量</Text>
+      <Text style={s.fieldLabel}>{t("quiz.questionCount")}</Text>
       <TextInput
         style={s.fieldInput}
         value={customCount}
@@ -408,7 +434,7 @@ export default function QuizScreen() {
       />
 
       {/* Difficulty */}
-      <Text style={s.fieldLabel}>难度</Text>
+      <Text style={s.fieldLabel}>{t("quiz.difficulty")}</Text>
       <View style={s.typeRow}>
         {([1, 2, 3] as const).map((d) => (
           <TouchableOpacity
@@ -417,23 +443,23 @@ export default function QuizScreen() {
             onPress={() => setCustomDifficulty(d)}
           >
             <Text style={[s.typeChipText, customDifficulty === d && s.typeChipTextActive]}>
-              {DIFFICULTY_LABELS[d]}
+              {t(DIFFICULTY_LABEL_KEYS[d])}
             </Text>
           </TouchableOpacity>
         ))}
       </View>
 
       {/* Type distribution */}
-      <Text style={s.fieldLabel}>题型分布</Text>
+      <Text style={s.fieldLabel}>{t("quiz.typeDistribution")}</Text>
       <View style={s.distRow}>
         {[
-          { label: "单选", value: typeDistSingle, set: setTypeDistSingle },
-          { label: "多选", value: typeDistMulti, set: setTypeDistMulti },
-          { label: "判断", value: typeDistTF, set: setTypeDistTF },
-          { label: "简答", value: typeDistShort, set: setTypeDistShort },
+          { labelKey: "quiz.badgeSingle", value: typeDistSingle, set: setTypeDistSingle },
+          { labelKey: "quiz.badgeMulti", value: typeDistMulti, set: setTypeDistMulti },
+          { labelKey: "quiz.badgeTrueFalse", value: typeDistTF, set: setTypeDistTF },
+          { labelKey: "quiz.badgeShort", value: typeDistShort, set: setTypeDistShort },
         ].map((item) => (
-          <View key={item.label} style={s.distItem}>
-            <Text style={s.distLabel}>{item.label}</Text>
+          <View key={item.labelKey} style={s.distItem}>
+            <Text style={s.distLabel}>{t(item.labelKey)}</Text>
             <View style={s.distStepper}>
               <TouchableOpacity
                 style={s.distStepBtn}
@@ -454,7 +480,9 @@ export default function QuizScreen() {
       </View>
 
       {/* Bank ratio */}
-      <Text style={s.fieldLabel}>题库占比: {Math.round(customBankRatio * 100)}%</Text>
+      <Text style={s.fieldLabel}>
+        {t("quiz.bankRatio")}: {Math.round(customBankRatio * 100)}%
+      </Text>
       <View style={s.sliderWrap}>
         <TouchableOpacity
           style={[s.sliderTrack, { backgroundColor: colors.muted }]}
@@ -499,7 +527,9 @@ export default function QuizScreen() {
       </View>
 
       {/* Wrong ratio */}
-      <Text style={s.fieldLabel}>错题占比: {Math.round(customWrongRatio * 100)}%</Text>
+      <Text style={s.fieldLabel}>
+        {t("quiz.wrongRatio")}: {Math.round(customWrongRatio * 100)}%
+      </Text>
       <View style={s.sliderWrap}>
         <View style={[s.sliderTrack, { backgroundColor: colors.muted }]}>
           <View
@@ -548,7 +578,7 @@ export default function QuizScreen() {
         ) : (
           <>
             <SwordsIcon size={16} color={colors.primaryForeground} />
-            <Text style={s.startBtnText}>开始自定义测验</Text>
+            <Text style={s.startBtnText}>{t("quiz.startCustomQuiz")}</Text>
           </>
         )}
       </TouchableOpacity>
@@ -587,15 +617,19 @@ export default function QuizScreen() {
               </View>
             )}
             <View style={s.bankMeta}>
-              <Text style={s.bankMetaText}>使用 {item.usageCount} 次</Text>
-              <Text style={s.bankMetaText}>正确率 {(item.correctRate * 100).toFixed(0)}%</Text>
+              <Text style={s.bankMetaText}>
+                {t("quiz.usageCountValue", { count: item.usageCount })}
+              </Text>
+              <Text style={s.bankMetaText}>
+                {t("quiz.correctRate")}: {(item.correctRate * 100).toFixed(0)}%
+              </Text>
             </View>
           </View>
         )}
         contentContainerStyle={s.bankList}
         ListEmptyComponent={
           <View style={s.emptyWrap}>
-            <Text style={s.emptyText}>题库暂无题目</Text>
+            <Text style={s.emptyText}>{t("quiz.noQuestions")}</Text>
           </View>
         }
       />
@@ -609,7 +643,7 @@ export default function QuizScreen() {
       {/* Header */}
       <View style={s.header}>
         <View style={[s.headerInner, { maxWidth: layout.centeredContentWidth }]}>
-          <Text style={s.headerTitle}>测验</Text>
+          <Text style={s.headerTitle}>{t("quiz.title")}</Text>
         </View>
       </View>
 
@@ -623,7 +657,7 @@ export default function QuizScreen() {
             activeOpacity={0.7}
           >
             <Text style={[s.subTabText, activeTab === tab.key && s.subTabTextActive]}>
-              {tab.label}
+              {t(tab.labelKey)}
             </Text>
           </TouchableOpacity>
         ))}

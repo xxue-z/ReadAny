@@ -1,5 +1,6 @@
 import { QuizGenerationError } from "@readany/core/stores/quiz-store";
 import type { AIConfig } from "@readany/core/types";
+import type { TFunction } from "i18next";
 
 /** True when the settings store has an active endpoint + model to talk to. */
 export function hasUsableAIConfig(aiConfig: AIConfig | undefined | null): aiConfig is AIConfig {
@@ -8,16 +9,23 @@ export function hasUsableAIConfig(aiConfig: AIConfig | undefined | null): aiConf
   return aiConfig.endpoints.some((endpoint) => endpoint.id === aiConfig.activeEndpointId);
 }
 
-/** Localized (zh) failure message for quiz generation. */
-export function getQuizFailureMessage(err: unknown): string {
+/** Turn a quiz-generation failure into a localized, actionable message. */
+export function getQuizFailureMessage(err: unknown, t: TFunction): string {
   if (err instanceof QuizGenerationError) {
     switch (err.code) {
       case "NO_AI_CONFIG":
-        return "请先在设置中配置 AI 端点与模型。";
+        return t("quiz.errorNoAIConfig", {
+          defaultValue: "Configure an AI endpoint and model in Settings first.",
+        });
       case "NO_QUESTIONS":
-        return "没有可出题的素材：请确认书籍已完成向量化，且最近有阅读记录。";
+        return t("quiz.errorNoQuestions", {
+          defaultValue:
+            "No material to build questions from. Make sure the book is vectorized and you have recent reading activity.",
+        });
       case "GENERATION_FAILED":
-        return "AI 生成题目失败，请稍后重试。";
+        return t("quiz.errorGenerationFailed", {
+          defaultValue: "AI question generation failed. Please try again.",
+        });
     }
   }
   return err instanceof Error ? err.message : String(err);

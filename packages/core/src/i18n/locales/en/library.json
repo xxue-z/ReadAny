@@ -166,7 +166,9 @@
       "preview": "Preview",
       "title": "Edit Document",
       "saved": "Saved",
-      "saveError": "Save failed"
+      "saveError": "Save failed",
+      "emptyTitle": "Cannot save",
+      "emptyBody": "The document is empty. Write at least one line before saving."
     }
   },
   "home": {
