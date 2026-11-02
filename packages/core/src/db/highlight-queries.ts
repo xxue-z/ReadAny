@@ -198,6 +198,14 @@ export async function updateHighlight(id: string, updates: Partial<Highlight>): 
     sets.push("text = ?");
     values.push(updates.text);
   }
+  if (Object.prototype.hasOwnProperty.call(updates, "quadPoints")) {
+    sets.push("quad_points = ?");
+    values.push(
+      updates.quadPoints && updates.quadPoints.length > 0
+        ? JSON.stringify(updates.quadPoints)
+        : null,
+    );
+  }
   // Add sync tracking
   const deviceId = await getDeviceId();
   const syncVersion = await nextSyncVersion(database, "highlights");
