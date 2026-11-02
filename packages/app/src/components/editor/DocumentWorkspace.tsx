@@ -1,5 +1,5 @@
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
-import { getDesktopLibraryRoot } from "@/lib/storage/desktop-library-root";
+import { getDesktopLibraryRoot, resolveDesktopDataPath } from "@/lib/storage/desktop-library-root";
 import { MdToEpubConverter } from "@readany/core/utils/md-to-epub";
 import { useLibraryStore } from "@/stores/library-store";
 import { Save } from "lucide-react";
@@ -55,9 +55,9 @@ export function DocumentWorkspace({ bookId }: DocumentWorkspaceProps) {
           }
         } catch {
           if (!cancelled) {
-            setMarkdown("# New Document
+            setMarkdown(`# New Document
 
-Start writing...");
+Start writing...`);
             setIsLoading(false);
           }
         }
@@ -88,9 +88,7 @@ Start writing...");
       await writeFile(epubPath, result.epubBytes);
 
       const encoder = new TextEncoder();
-      const { join } = await import("@tauri-apps/api/path");
-        const root = await getDesktopLibraryRoot();
-        const mdPath = await join(root, `books/${bookId}.md`);
+      const mdPath = await join(root, `books/${bookId}.md`);
       await writeFile(mdPath, encoder.encode(markdown));
 
       toast.success(t("editor.saved", "Document saved"));
