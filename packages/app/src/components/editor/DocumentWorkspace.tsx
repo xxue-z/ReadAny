@@ -1,6 +1,5 @@
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
-import { getDesktopLibraryRoot, resolveDesktopDataPath } from "@/lib/storage/desktop-library-root";
-import { MdToEpubConverter } from "@readany/core/utils/md-to-epub";
+import { getDesktopLibraryRoot } from "@/lib/storage/desktop-library-root";
 import { useLibraryStore } from "@/stores/library-store";
 import { Save } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -14,7 +13,7 @@ interface DocumentWorkspaceProps {
 export function DocumentWorkspace({ bookId }: DocumentWorkspaceProps) {
   const { t } = useTranslation();
   const books = useLibraryStore((s) => s.books);
-  const updateBook = useLibraryStore((s) => s.updateBook);
+  const saveDocument = useLibraryStore((s) => s.saveDocument);
   const [markdown, setMarkdown] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -70,27 +69,7 @@ Start writing...`);
     if (!markdown.trim()) return;
     setIsSaving(true);
     try {
-      const converter = new MdToEpubConverter();
-      const result = converter.convertToBytes({ markdown });
-
-      // Update book title if derived
-      if (book && result.bookTitle !== book.meta.title) {
-        await updateBook(book.id, { meta: { ...book.meta, title: result.bookTitle } });
-      }
-
-      // Write EPUB and source MD
-      const { writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
-      const { join } = await import("@tauri-apps/api/path");
-      const root = await getDesktopLibraryRoot();
-      await mkdir(join(root, "books"), { recursive: true });
-
-      const epubPath = await resolveDesktopDataPath(`books/${bookId}.epub`);
-      await writeFile(epubPath, result.epubBytes);
-
-      const encoder = new TextEncoder();
-      const mdPath = await join(root, `books/${bookId}.md`);
-      await writeFile(mdPath, encoder.encode(markdown));
-
+      await saveDocument(bookId, markdown);
       toast.success(t("editor.saved", "Document saved"));
     } catch (err) {
       console.error("[DocumentWorkspace] Save failed:", err);
@@ -98,7 +77,7 @@ Start writing...`);
     } finally {
       setIsSaving(false);
     }
-  }, [markdown, bookId, book, updateBook, t]);
+  }, [markdown, bookId, saveDocument, t]);
 
   // Auto-save with debounce
   const debouncedSave = useCallback(() => {

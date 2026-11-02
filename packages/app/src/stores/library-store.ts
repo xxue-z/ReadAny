@@ -383,6 +383,7 @@ export interface LibraryState {
   addTagToBook: (bookId: string, tag: string) => void;
   removeTagFromBook: (bookId: string, tag: string) => void;
   createDocument: (title?: string) => Promise<Book | null>;
+  saveDocument: (bookId: string, markdown: string) => Promise<void>;
 }
 
 async function restoreDeletedDesktopBook(bookId: string, filePath: string): Promise<Book | null> {
@@ -1443,6 +1444,27 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     };
     get().addBook(book);
     return book;
+  },
+
+  saveDocument: async (bookId, markdown) => {
+    const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
+    const converter = new MdToEpubConverter();
+    const result = converter.convertToBytes({ markdown });
+    const encoder = new TextEncoder();
+    const { writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { join } = await import("@tauri-apps/api/path");
+    const { getDesktopLibraryRoot } = await import("@/lib/storage/desktop-library-root");
+    const { resolveDesktopDataPath } = await import("@/lib/storage/desktop-library-root");
+    const root = await getDesktopLibraryRoot();
+    await mkdir(await join(root, "books"), { recursive: true });
+    const epubPath = await resolveDesktopDataPath(`books/${bookId}.epub`);
+    const mdPath = await resolveDesktopDataPath(`books/${bookId}.md`);
+    await writeFile(epubPath, result.epubBytes);
+    await writeFile(mdPath, encoder.encode(markdown));
+    const book = get().books.find((b) => b.id === bookId);
+    if (book && result.bookTitle !== book.meta.title) {
+      await get().updateBook(bookId, { meta: { ...book.meta, title: result.bookTitle } });
+    }
   },
 
 }));
