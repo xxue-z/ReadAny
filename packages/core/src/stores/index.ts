@@ -60,3 +60,7 @@ export type { SyncState } from "./sync-store";
 // Goals store
 export { useGoalsStore } from "./goals-store";
 export type { GoalsState } from "./goals-store";
+
+// Quiz store
+export { useQuizStore } from "./quiz-store";
+export type { QuizState } from "./quiz-store";
