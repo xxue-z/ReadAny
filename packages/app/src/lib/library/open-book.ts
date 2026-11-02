@@ -159,6 +159,20 @@ export async function openDesktopBook({
     }
   }
 
+  // MD documents open in the editor, not the reader
+  if (book.format === "md" && book.filePath) {
+    const { addTab, setActiveTab } = useAppStore.getState();
+    const tabId = `document-${book.id}`;
+    addTab({
+      id: tabId,
+      type: "document",
+      title: book.meta.title,
+      bookId: book.id,
+    });
+    setActiveTab(tabId);
+    return true;
+  }
+
   const platform = getPlatformService();
 
   // A soft-deleted book is no longer in the live store — even if its file
