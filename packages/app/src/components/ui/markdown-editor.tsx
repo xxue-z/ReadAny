@@ -32,6 +32,11 @@ interface MarkdownEditorProps {
   placeholder?: string;
   className?: string;
   autoFocus?: boolean;
+  /**
+   * Let the editor fill its container (document workspace) instead of using the
+   * compact 30vh inline height used inside dialogs.
+   */
+  fillHeight?: boolean;
 }
 
 export function MarkdownEditor({
@@ -40,6 +45,7 @@ export function MarkdownEditor({
   placeholder,
   className,
   autoFocus = false,
+  fillHeight = false,
 }: MarkdownEditorProps) {
   const { t } = useTranslation();
   // Track internal updates to prevent sync loop
@@ -48,7 +54,9 @@ export function MarkdownEditor({
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
-        heading: { levels: [1, 2, 3] },
+        // Imported documents may use h4–h6; dropping them would silently
+        // downgrade headings on save.
+        heading: { levels: [1, 2, 3, 4, 5, 6] },
         dropcursor: false,
         gapcursor: false,
       }),
@@ -135,6 +143,7 @@ export function MarkdownEditor({
         "group rounded-lg border border-border/60 bg-background overflow-hidden",
         "focus-within:border-primary/40 focus-within:ring-2 focus-within:ring-primary/10 focus-within:ring-offset-1",
         "transition-all duration-200",
+        fillHeight && "flex h-full min-h-0 flex-col",
         className,
       )}
     >
@@ -264,8 +273,10 @@ export function MarkdownEditor({
       <EditorContent
         editor={editor}
         className={cn(
-          "max-h-[30vh] overflow-y-auto px-4 py-3",
+          "overflow-y-auto px-4 py-3",
+          fillHeight ? "min-h-0 flex-1" : "max-h-[30vh]",
           "[&_.ProseMirror]:outline-none",
+          fillHeight && "[&_.ProseMirror]:min-h-full",
           "[&_.is-editor-empty:first-child::before]:text-muted-foreground/60",
           "[&_.is-editor-empty:first-child::before]:pointer-events-none",
           "[&_.is-editor-empty:first-child::before]:float-left",

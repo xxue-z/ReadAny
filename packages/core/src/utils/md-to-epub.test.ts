@@ -23,11 +23,23 @@ function entryText(epubBytes: Uint8Array, name: string): string {
       epubBytes[offset + 2] === 0x03 &&
       epubBytes[offset + 3] === 0x04
     ) {
-      const nameLen = new DataView(epubBytes.buffer, epubBytes.byteOffset + offset + 26, 2).getUint16(0, true);
-      const extraLen = new DataView(epubBytes.buffer, epubBytes.byteOffset + offset + 28, 2).getUint16(0, true);
+      const nameLen = new DataView(
+        epubBytes.buffer,
+        epubBytes.byteOffset + offset + 26,
+        2,
+      ).getUint16(0, true);
+      const extraLen = new DataView(
+        epubBytes.buffer,
+        epubBytes.byteOffset + offset + 28,
+        2,
+      ).getUint16(0, true);
       const entryName = decoder.decode(epubBytes.subarray(offset + 30, offset + 30 + nameLen));
       const dataStart = offset + 30 + nameLen + extraLen;
-      const compressedSize = new DataView(epubBytes.buffer, epubBytes.byteOffset + offset + 18, 4).getUint32(0, true);
+      const compressedSize = new DataView(
+        epubBytes.buffer,
+        epubBytes.byteOffset + offset + 18,
+        4,
+      ).getUint32(0, true);
       if (entryName === name) {
         return decoder.decode(epubBytes.subarray(dataStart, dataStart + compressedSize));
       }
@@ -160,7 +172,7 @@ describe("MdToEpubConverter", () => {
 
     it("renders fenced code blocks", () => {
       const result = converter.convertToBytes({
-        markdown: '# Code\n\n```js\nconst x = 1;\n```',
+        markdown: "# Code\n\n```js\nconst x = 1;\n```",
       });
       const ch = entryText(result.epubBytes, "OEBPS/chapter1.xhtml");
       expect(ch).toContain("<pre>");
@@ -279,6 +291,76 @@ describe("MdToEpubConverter", () => {
       expect(result.chapterCount).toBe(1);
       expect(result.bookTitle).toBe("Untitled");
       expect(result.epubBytes.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("valid XHTML output", () => {
+    it("self-closes void elements so chapters parse as XML", () => {
+      const result = converter.convertToBytes({
+        markdown: ["# Notes", "", "line one  ", "line two", "", "---", "", "- [ ] todo"].join("\n"),
+      });
+      const xhtml = entryText(result.epubBytes, "OEBPS/chapter1.xhtml");
+
+      expect(xhtml).toContain("<br />");
+      expect(xhtml).toContain("<hr />");
+      expect(xhtml).toMatch(/<input[^>]*\/>/);
+
+      // No bare void tags may remain.
+      expect(xhtml).not.toMatch(/<br>/i);
+      expect(xhtml).not.toMatch(/<hr>/i);
+      expect(xhtml).not.toMatch(/<input(?![^>]*\/>)[^>]*>/i);
+    });
+
+    it("strips script/style blocks and inline event handlers", () => {
+      const result = converter.convertToBytes({
+        markdown: "# X\n\n<script>alert(1)</script>\n\n<b onclick='evil()'>bold</b>",
+      });
+      const xhtml = entryText(result.epubBytes, "OEBPS/chapter1.xhtml");
+      expect(xhtml).not.toContain("<script");
+      expect(xhtml).not.toContain("onclick");
+      expect(xhtml).toContain("bold");
+    });
+  });
+
+  describe("local image packaging", () => {
+    const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    it("embeds referenced images and rewrites the src", () => {
+      const result = converter.convertToBytes({
+        markdown: "# Pics\n\n![cat](./images/cat.png)",
+        assets: { "./images/cat.png": pngBytes },
+      });
+      expect(result.embeddedImageCount).toBe(1);
+
+      const xhtml = entryText(result.epubBytes, "OEBPS/chapter1.xhtml");
+      expect(xhtml).toContain('src="assets/1-cat.png"');
+      expect(xhtml).toMatch(/<img[^>]*\/>/);
+
+      const opf = entryText(result.epubBytes, "content.opf");
+      expect(opf).toContain("OEBPS/assets/1-cat.png");
+      expect(opf).toContain('media-type="image/png"');
+
+      const asset = entryText(result.epubBytes, "OEBPS/assets/1-cat.png");
+      expect(asset.length).toBeGreaterThan(0);
+    });
+
+    it("leaves images untouched when no asset was provided", () => {
+      const result = converter.convertToBytes({
+        markdown: "# Pics\n\n![cat](./images/cat.png)",
+      });
+      expect(result.embeddedImageCount).toBe(0);
+      const xhtml = entryText(result.epubBytes, "OEBPS/chapter1.xhtml");
+      expect(xhtml).toContain('src="./images/cat.png"');
+    });
+
+    it("matches assets by file name when the markdown path is relative to another folder", () => {
+      const result = converter.convertToBytes({
+        markdown: "# Pics\n\n![cat](../img/cat.jpg)",
+        assets: { "img/cat.jpg": pngBytes },
+      });
+      expect(result.embeddedImageCount).toBe(1);
+      const opf = entryText(result.epubBytes, "content.opf");
+      expect(opf).toContain('media-type="image/jpeg"');
     });
   });
 });

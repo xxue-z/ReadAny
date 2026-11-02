@@ -23,6 +23,12 @@ export interface Tab {
   initialCfi?: string; // for reader tabs - initial location to navigate to
   isModified?: boolean;
   lastActiveAt?: number; // timestamp of last activation (for idle tab reclaim)
+  /**
+   * Bumped when the underlying book file is rewritten (e.g. the MD editor saved
+   * a new EPUB). The reader remounts on change so it reloads the file instead of
+   * showing the cached copy.
+   */
+  reloadNonce?: number;
 }
 
 export type SidebarTab = "chat" | "notes" | "toc" | "highlights" | "stats";
@@ -53,6 +59,8 @@ export interface AppState {
   removeTab: (tabId: string) => void;
   setActiveTab: (tabId: string) => void;
   reorderTabs: (fromIndex: number, toIndex: number) => void;
+  /** Force a reader tab to reload its book file (after the file was rewritten). */
+  bumpTabReloadNonce: (tabId: string) => void;
   toggleSidebar: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
   setShowSettings: (show: boolean, tab?: SettingsTab) => void;
@@ -116,6 +124,13 @@ export const useAppStore = create<AppState>((set) => ({
       tabs.splice(toIndex, 0, moved);
       return { tabs };
     }),
+
+  bumpTabReloadNonce: (tabId) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === tabId ? { ...tab, reloadNonce: (tab.reloadNonce ?? 0) + 1 } : tab,
+      ),
+    })),
 
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
 

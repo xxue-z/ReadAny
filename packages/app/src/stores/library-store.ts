@@ -1023,21 +1023,40 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             }
 
             const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
-            const { readFile } = await import("@tauri-apps/plugin-fs");
+            const { readFile, writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
+            const { join, dirname } = await import("@tauri-apps/api/path");
             const rawBytes = await readFile(filePath);
             const decoder = new TextDecoder();
-            const markdown = decoder.decode(rawBytes);
+            const sourceMarkdown = decoder.decode(rawBytes);
+            const root = await getDesktopLibraryRoot();
+            const booksDir = await join(root, "books");
+
+            // Copy referenced local images into the library so the EPUB stays
+            // self-contained (and later edits still resolve them).
+            const { collectMarkdownAssets } = await import("@readany/core/utils/md-assets");
+            const assetsDir = await join(booksDir, "assets", bookId);
+            const { markdown, assets } = await collectMarkdownAssets({
+              markdown: sourceMarkdown,
+              assetPrefix: bookId,
+              readAsset: async (relativePath) =>
+                readFile(await join(await dirname(filePath), relativePath)),
+              persistAsset: async (fileName, bytes) => {
+                await mkdir(assetsDir, { recursive: true });
+                const dest = await join(assetsDir, fileName);
+                await writeFile(dest, bytes);
+                return `assets/${bookId}/${fileName}`;
+              },
+            });
+
             const converter = new MdToEpubConverter();
-            const mdResult = converter.convertToBytes({ markdown });
+            const mdResult = converter.convertToBytes({ markdown, assets });
             if (mdResult.bookTitle) title = mdResult.bookTitle;
-            const { writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
-            const { join } = await import("@tauri-apps/api/path");
-            await mkdir(await join(await getDesktopLibraryRoot(), "books"), { recursive: true });
+            await mkdir(booksDir, { recursive: true });
             const destEpub = await resolveAppPath(`books/${bookId}.epub`);
             await writeFile(destEpub, mdResult.epubBytes);
-            // Save source MD for future re-editing
+            // Save (possibly image-rewritten) MD for future re-editing
             const mdPath = await resolveAppPath(`books/${bookId}.md`);
-            await writeFile(mdPath, rawBytes);
+            await writeFile(mdPath, new TextEncoder().encode(markdown));
           }
 
           // Copy book file into the managed library root (books/{id}.{ext})
@@ -1439,7 +1458,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const mdPath = await resolveAppPath('books/' + bookId + '.md');
     await writeFile(epubPath, result.epubBytes);
     await writeFile(mdPath, encoder.encode(markdown));
-    const book = {
+    const book: Book = {
       id: bookId,
       filePath: "books/" + bookId + ".epub",
       format: "md",
@@ -1458,22 +1477,57 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
   saveDocument: async (bookId, markdown) => {
     const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
-    const converter = new MdToEpubConverter();
-    const result = converter.convertToBytes({ markdown });
-    const encoder = new TextEncoder();
-    const { writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { writeFile, mkdir, readFile } = await import("@tauri-apps/plugin-fs");
     const { join } = await import("@tauri-apps/api/path");
-    const { getDesktopLibraryRoot } = await import("@/lib/storage/desktop-library-root");
-    const { resolveDesktopDataPath } = await import("@/lib/storage/desktop-library-root");
+    const { getDesktopLibraryRoot, resolveDesktopDataPath } = await import(
+      "@/lib/storage/desktop-library-root"
+    );
+    const { collectMarkdownAssets } = await import("@readany/core/utils/md-assets");
+
     const root = await getDesktopLibraryRoot();
-    await mkdir(await join(root, "books"), { recursive: true });
+    const booksDir = await join(root, "books");
+    await mkdir(booksDir, { recursive: true });
+
+    // Embed local images that live under `books/` (imports copy them there, see
+    // the md import branch) so editing does not silently drop them.
+    const { assets } = await collectMarkdownAssets({
+      markdown,
+      readAsset: async (relativePath) => readFile(await join(booksDir, relativePath)),
+    });
+
+    const converter = new MdToEpubConverter();
+    const result = converter.convertToBytes({ markdown, assets });
+    const encoder = new TextEncoder();
     const epubPath = await resolveDesktopDataPath(`books/${bookId}.epub`);
     const mdPath = await resolveDesktopDataPath(`books/${bookId}.md`);
     await writeFile(epubPath, result.epubBytes);
     await writeFile(mdPath, encoder.encode(markdown));
+
     const book = get().books.find((b) => b.id === bookId);
-    if (book && result.bookTitle !== book.meta.title) {
-      await get().updateBook(bookId, { meta: { ...book.meta, title: result.bookTitle } });
+    if (!book) return;
+
+    const titleChanged = result.bookTitle !== book.meta.title;
+    const wasVectorized = !!book.isVectorized;
+    await get().updateBook(bookId, {
+      // Always bump updatedAt so "recently updated" sorting and sync see the edit.
+      updatedAt: Date.now(),
+      ...(titleChanged ? { meta: { ...book.meta, title: result.bookTitle } } : {}),
+      // The RAG index describes the previous text; force a re-index.
+      ...(wasVectorized ? { isVectorized: false, vectorizeProgress: 0 } : {}),
+    });
+
+    // Let any open reader tab reload the regenerated EPUB.
+    const { refreshReaderForBook } = await import("@/lib/reader/refresh-open-reader");
+    refreshReaderForBook(bookId, book.filePath);
+
+    if (wasVectorized && book.filePath) {
+      triggerVectorizeBook(bookId, book.filePath, (progress) => {
+        const pct =
+          progress.totalChunks > 0 ? progress.processedChunks / progress.totalChunks : 0;
+        get().updateBook(bookId, { vectorizeProgress: pct });
+      })
+        .then(() => get().updateBook(bookId, { isVectorized: true, vectorizeProgress: 1 }))
+        .catch((err) => console.warn("[Library] Re-vectorize after save failed:", err));
     }
   },
 

@@ -687,6 +687,7 @@ async function inspectDeletedMobileBookCandidate(
 
   if (ext === "md") {
     try {
+      const platform = getPlatformService();
       const sourceBytes = await platform.readFile(filePath);
       const text = new TextDecoder("utf-8").decode(sourceBytes);
       const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
@@ -1698,10 +1699,21 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
   saveDocument: async (bookId, markdown) => {
     const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
-    const converter = new MdToEpubConverter();
-    const result = converter.convertToBytes({ markdown });
+    const { collectMarkdownAssets } = await import("@readany/core/utils/md-assets");
     const platform = getPlatformService();
     await ensureAppSubDir("books");
+
+    const booksDir = await resolveAppPath("books");
+
+    // Embed local images that live under `books/` so editing keeps them.
+    const { assets } = await collectMarkdownAssets({
+      markdown,
+      readAsset: async (relativePath) =>
+        platform.readFile(await platform.joinPath(booksDir, relativePath)),
+    });
+
+    const converter = new MdToEpubConverter();
+    const result = converter.convertToBytes({ markdown, assets });
     const relativeEpub = `books/${bookId}.epub`;
     const relativeMd = `books/${bookId}.md`;
     const epubPath = await resolveAppPath(relativeEpub);
@@ -1709,12 +1721,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     const encoder = new TextEncoder();
     await platform.writeFile(epubPath, result.epubBytes);
     await platform.writeFile(mdPath, encoder.encode(markdown));
+
     const book = get().books.find((b) => b.id === bookId);
-    if (book && result.bookTitle !== book.meta.title) {
-      await get().updateBook(bookId, {
-        meta: { ...book.meta, title: result.bookTitle },
-        updatedAt: Date.now(),
-      });
-    }
+    if (!book) return;
+
+    const titleChanged = result.bookTitle !== book.meta.title;
+    const wasVectorized = !!book.isVectorized;
+    await get().updateBook(bookId, {
+      // Always bump updatedAt; the text changed even when the title did not.
+      updatedAt: Date.now(),
+      ...(titleChanged ? { meta: { ...book.meta, title: result.bookTitle } } : {}),
+      // The vector index describes the previous text.
+      ...(wasVectorized ? { isVectorized: false, vectorizeProgress: 0 } : {}),
+    });
   },
 }));

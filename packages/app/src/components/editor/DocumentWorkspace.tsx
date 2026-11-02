@@ -28,44 +28,43 @@ export function DocumentWorkspace({ bookId }: DocumentWorkspaceProps) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let join, root;
+      const { exists, readFile } = await import("@tauri-apps/plugin-fs");
+      const { join } = await import("@tauri-apps/api/path");
+      const root = await getDesktopLibraryRoot();
+      const mdPath = await join(root, `books/${bookId}.md`);
+
       try {
-        const { readFile } = await import("@tauri-apps/plugin-fs");
-        const pathMod = await import("@tauri-apps/api/path");
-        join = pathMod.join;
-        root = await getDesktopLibraryRoot();
-        const mdPath = await join(root, `books/${bookId}.md`);
         const bytes = await readFile(mdPath);
-        const decoder = new TextDecoder();
         if (!cancelled) {
-          setMarkdown(decoder.decode(bytes));
+          setMarkdown(new TextDecoder().decode(bytes));
           setIsLoading(false);
         }
       } catch {
-        // If no .md source exists, try reading the book file directly
-        try {
-          const { readFile } = await import("@tauri-apps/plugin-fs");
-          const epubPath = await join(root, `books/${bookId}.epub`);
-          const bytes = await readFile(epubPath);
-          if (!cancelled) {
-            setMarkdown(`# ${book?.meta.title || "Untitled"}
-
-> This book was imported as EPUB. Edit as Markdown, save to re-generate EPUB.
-
-`);
-            setIsLoading(false);
-          }
-        } catch {
-          if (!cancelled) {
-            setMarkdown(`# New Document
-
-Start writing...`);
-            setIsLoading(false);
-          }
+        // The source .md is missing. Warn instead of silently presenting an
+        // empty document, because saving would overwrite the existing book.
+        const title =
+          useLibraryStore.getState().books.find((b) => b.id === bookId)?.meta.title || "Untitled";
+        const epubPath = await join(root, `books/${bookId}.epub`);
+        const hasDerivedEpub = await exists(epubPath).catch(() => false);
+        if (!cancelled) {
+          setMarkdown(
+            hasDerivedEpub
+              ? `# ${title}\n\n> 源 Markdown 文件缺失，以下是占位内容。直接保存会覆盖原文档。\n\n`
+              : `# ${title}\n\nStart writing...`,
+          );
+          setIsLoading(false);
         }
       }
-    })();
-    return () => { cancelled = true; };
+    })().catch((err) => {
+      console.error("[DocumentWorkspace] Failed to load document:", err);
+      if (!cancelled) {
+        setMarkdown("# New Document\n\nStart writing...");
+        setIsLoading(false);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [bookId]);
 
   const handleSave = useCallback(async () => {
@@ -124,7 +123,16 @@ Start writing...`);
           )}
           <button
             type="button"
-            onClick={() => {
+            onClick={async () => {
+              // Flush pending edits first: the reader loads the EPUB from disk,
+              // and a debounced save would still be 3s away.
+              if (saveTimerRef.current) {
+                clearTimeout(saveTimerRef.current);
+                saveTimerRef.current = null;
+              }
+              if (markdown.trim()) {
+                await handleSave();
+              }
               const tabId = `reader-${bookId}`;
               addTab({ id: tabId, type: "reader", title: book?.meta.title ?? "", bookId });
               setActiveTab(tabId);
@@ -145,12 +153,13 @@ Start writing...`);
           </button>
         </div>
       </div>
-      <div className="flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <MarkdownEditor
           value={markdown}
           onChange={handleChange}
           placeholder={t("editor.placeholder", "Start writing Markdown...")}
-          className="h-full"
+          className="h-full rounded-none border-0"
+          fillHeight
         />
       </div>
     </div>

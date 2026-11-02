@@ -7,13 +7,21 @@
  */
 
 import { marked } from "marked";
-import { buildStoreOnlyZip, type ZipEntry } from "./store-only-zip";
+import { type ZipEntry, buildStoreOnlyZip } from "./store-only-zip";
 
 export interface Md2EpubOptions {
   /** Raw markdown source text. */
   markdown: string;
   /** Optional book title override (otherwise derived from first H1 or "Untitled"). */
   title?: string;
+  /**
+   * Local images referenced by the markdown, keyed by the (relative) src used in
+   * the document — e.g. `{ "./images/a.png": bytes }`. Matching images are
+   * embedded in the EPUB and rewritten to point at the packaged copy; missing
+   * ones are left untouched (so the user can see the breakage instead of
+   * silently losing the image).
+   */
+  assets?: Record<string, Uint8Array>;
 }
 
 export interface MdBytesConversionResult {
@@ -21,11 +29,19 @@ export interface MdBytesConversionResult {
   bookTitle: string;
   chapterCount: number;
   language: string;
+  /** Number of local images embedded in the EPUB (0 when none could be found). */
+  embeddedImageCount: number;
 }
 
 interface MdChapter {
   title: string;
   html: string;
+}
+
+interface PackagedAsset {
+  zipPath: string;
+  mediaType: string;
+  data: Uint8Array;
 }
 
 const escapeXml = (str: string): string => {
@@ -37,6 +53,137 @@ const escapeXml = (str: string): string => {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&apos;");
 };
+
+// ---------------------------------------------------------------------------
+// XHTML normalisation
+// ---------------------------------------------------------------------------
+
+/**
+ * Void elements must be self-closed: chapters are parsed as XML
+ * (`application/xhtml+xml`), so `<br>` makes the whole chapter invalid.
+ */
+const VOID_ELEMENT_PATTERN =
+  /<(br|hr|img|input|col|area|base|embed|param|source|track|wbr|meta|link)((?:\s[^<>]*?)?)\s*\/?>/gi;
+
+export function toXhtmlVoidElements(html: string): string {
+  return html.replace(VOID_ELEMENT_PATTERN, (_match, tag: string, attrs: string) => {
+    const cleanedAttrs = (attrs ?? "").replace(/\s*\/\s*$/, "");
+    return `<${tag}${cleanedAttrs} />`;
+  });
+}
+
+/** Remove constructs that would execute or break the XHTML document. */
+export function sanitizeMarkdownHtml(html: string): string {
+  return html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, "")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, "")
+    .replace(/<(iframe|object|embed|frame|frameset)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, "")
+    .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, "")
+    .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, "");
+}
+
+// ---------------------------------------------------------------------------
+// Local image packaging
+// ---------------------------------------------------------------------------
+
+const IMAGE_MEDIA_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  bmp: "image/bmp",
+  avif: "image/avif",
+};
+
+function mediaTypeForAssetFile(fileName: string): string {
+  const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+  return IMAGE_MEDIA_TYPES[ext] ?? "application/octet-stream";
+}
+
+/** Normalise a markdown/HTML image src for matching against the asset map. */
+export function normalizeAssetKey(src: string): string {
+  let key = src.trim();
+  if (key.startsWith("file://")) key = key.slice("file://".length);
+  try {
+    key = decodeURIComponent(key);
+  } catch {
+    // keep raw value
+  }
+  return key
+    .replace(/\\/g, "/")
+    .replace(/^\.\//, "")
+    .replace(/^(\.\.\/)+/, "")
+    .replace(/^\/+/, "");
+}
+
+function assetFileName(key: string, index: number): string {
+  const base = key.split("/").pop() || `image-${index}`;
+  const safe = base.replace(/[^\w.\-]+/g, "_") || `image-${index}`;
+  return `${index}-${safe}`;
+}
+
+function findAssetBytes(
+  assets: Record<string, Uint8Array>,
+  src: string,
+  normalized: string,
+): Uint8Array | undefined {
+  if (assets[src]) return assets[src];
+  if (assets[normalized]) return assets[normalized];
+
+  // Fall back to a suffix match (e.g. markdown says `../img/a.png` while the
+  // caller registered `img/a.png`).
+  const suffix = normalized.split("/").slice(-2).join("/");
+  for (const [candidate, bytes] of Object.entries(assets)) {
+    const normalizedCandidate = normalizeAssetKey(candidate);
+    if (
+      normalizedCandidate === normalized ||
+      normalizedCandidate.endsWith(`/${suffix}`) ||
+      normalizedCandidate.endsWith(`/${normalized}`)
+    ) {
+      return bytes;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Rewrite `<img src>` references to packaged assets under `OEBPS/assets/`.
+ * Images without a matching asset are left untouched.
+ */
+function packageChapterImages(
+  html: string,
+  assets: Record<string, Uint8Array> | undefined,
+  packaged: Map<string, PackagedAsset>,
+): string {
+  if (!assets || Object.keys(assets).length === 0) return html;
+
+  return html.replace(/<img\b([^>]*?)\/?>/gi, (match, rawAttrs: string) => {
+    const attrs = rawAttrs ?? "";
+    const srcMatch = attrs.match(/\bsrc\s*=\s*"([^"]*)"/i) ?? attrs.match(/\bsrc\s*=\s*'([^']*)'/i);
+    if (!srcMatch) return match;
+
+    const src = srcMatch[1];
+    const normalized = normalizeAssetKey(src);
+    const bytes = findAssetBytes(assets, src, normalized);
+    if (!bytes) return match;
+
+    let asset = packaged.get(normalized);
+    if (!asset) {
+      const fileName = assetFileName(normalized, packaged.size + 1);
+      asset = {
+        zipPath: `OEBPS/assets/${fileName}`,
+        mediaType: mediaTypeForAssetFile(fileName),
+        data: bytes,
+      };
+      packaged.set(normalized, asset);
+    }
+
+    const newAttrs = attrs.replace(srcMatch[0], `src="${asset.zipPath.replace(/^OEBPS\//, "")}"`);
+    return `<img${newAttrs} />`;
+  });
+}
 
 // ---------- chapter splitting ----------
 
@@ -97,7 +244,11 @@ function detectLanguage(text: string): string {
   let latinCount = 0;
   for (let i = 0; i < sample.length; i++) {
     const code = sample.charCodeAt(i);
-    if ((code >= 0x4e00 && code <= 0x9fff) || (code >= 0x3400 && code <= 0x4dbf) || (code >= 0xf900 && code <= 0xfaff)) {
+    if (
+      (code >= 0x4e00 && code <= 0x9fff) ||
+      (code >= 0x3400 && code <= 0x4dbf) ||
+      (code >= 0xf900 && code <= 0xfaff)
+    ) {
       cjkCount++;
     } else if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) {
       latinCount++;
@@ -165,13 +316,21 @@ function buildContentOpf(
   identifier: string,
   chapters: MdChapter[],
   lang: string,
+  assets: PackagedAsset[],
 ): string {
   const chapterManifest = chapters
-    .map((_, i) => `<item id="chap${i + 1}" href="OEBPS/chapter${i + 1}.xhtml" media-type="application/xhtml+xml"/>`)
+    .map(
+      (_, i) =>
+        `<item id="chap${i + 1}" href="OEBPS/chapter${i + 1}.xhtml" media-type="application/xhtml+xml"/>`,
+    )
     .join("\n      ");
-  const chapterSpine = chapters
-    .map((_, i) => `<itemref idref="chap${i + 1}"/>`)
+  const assetManifest = assets
+    .map(
+      (asset, i) =>
+        `<item id="asset${i + 1}" href="${asset.zipPath}" media-type="${asset.mediaType}"/>`,
+    )
     .join("\n      ");
+  const chapterSpine = chapters.map((_, i) => `<itemref idref="chap${i + 1}"/>`).join("\n      ");
 
   return (
     `<?xml version="1.0" encoding="UTF-8"?>\n` +
@@ -181,7 +340,7 @@ function buildContentOpf(
     `    <dc:language>${escapeXml(lang)}</dc:language>\n` +
     `    <dc:identifier id="book-id">${escapeXml(identifier)}</dc:identifier>\n` +
     `  </metadata>\n` +
-    `  <manifest>\n      ${chapterManifest}\n      <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>\n      <item id="css" href="style.css" media-type="text/css"/>\n  </manifest>\n` +
+    `  <manifest>\n      ${chapterManifest}\n${assetManifest ? `      ${assetManifest}\n` : ""}      <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>\n      <item id="css" href="style.css" media-type="text/css"/>\n  </manifest>\n` +
     `  <spine toc="ncx">\n      ${chapterSpine}\n  </spine>\n` +
     `</package>`
   );
@@ -199,6 +358,17 @@ function buildEpubBytes(options: Md2EpubOptions): MdBytesConversionResult {
   const lang = detectLanguage(markdown);
   const identifier = simpleIdentifier(markdown);
   const chapters = splitChapters(markdown);
+  const packagedAssets = new Map<string, PackagedAsset>();
+
+  // Normalise chapter HTML: valid XHTML, no executable markup, local images
+  // copied into the EPUB.
+  for (const chapter of chapters) {
+    chapter.html = packageChapterImages(
+      toXhtmlVoidElements(sanitizeMarkdownHtml(chapter.html)),
+      options.assets,
+      packagedAssets,
+    );
+  }
 
   const encoder = new TextEncoder();
   const entries: ZipEntry[] = [];
@@ -222,9 +392,15 @@ function buildEpubBytes(options: Md2EpubOptions): MdBytesConversionResult {
     });
   }
 
+  for (const asset of packagedAssets.values()) {
+    entries.push({ name: asset.zipPath, data: asset.data });
+  }
+
   entries.push({
     name: "content.opf",
-    data: encoder.encode(buildContentOpf(bookTitle, identifier, chapters, lang)),
+    data: encoder.encode(
+      buildContentOpf(bookTitle, identifier, chapters, lang, [...packagedAssets.values()]),
+    ),
   });
 
   const epubBytes = buildStoreOnlyZip(entries);
@@ -233,6 +409,7 @@ function buildEpubBytes(options: Md2EpubOptions): MdBytesConversionResult {
     bookTitle,
     chapterCount: chapters.length,
     language: lang,
+    embeddedImageCount: packagedAssets.size,
   };
 }
 

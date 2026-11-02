@@ -396,7 +396,14 @@ export function AppLayout() {
                   t={t}
                 />
               ) : (
-                <ReaderView bookId={tab.bookId} tabId={tab.id} />
+                <ReaderView
+                  // `reloadNonce` bumps when the book file is rewritten on disk
+                  // (MD editor save); remounting forces a reload instead of
+                  // reusing the cached blob/book.
+                  key={`${tab.id}:${tab.reloadNonce ?? 0}`}
+                  bookId={tab.bookId}
+                  tabId={tab.id}
+                />
               )}
             </div>
           );

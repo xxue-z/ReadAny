@@ -1,4 +1,4 @@
-import { BookOpenIcon, CheckIcon, ChevronLeftIcon, EyeIcon, EditIcon } from "@/components/ui/Icon";
+import { BookOpenIcon, CheckIcon, ChevronLeftIcon, EditIcon, EyeIcon } from "@/components/ui/Icon";
 import { KeyboardAwareScrollView } from "@/components/ui/KeyboardAwareScrollView";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
@@ -12,8 +12,8 @@ import {
   withOpacity,
 } from "@/styles/theme";
 import { useNavigation, useRoute } from "@react-navigation/native";
-import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RouteProp } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getPlatformService } from "@readany/core/services";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -179,7 +179,8 @@ function applyMarkdownSyntax(
       text.slice(selection.end);
     return {
       text: newText,
-      cursorPos: selection.start + syntax.prefix.length + selectedText.length + syntax.suffix.length,
+      cursorPos:
+        selection.start + syntax.prefix.length + selectedText.length + syntax.suffix.length,
     };
   }
   const newText =
@@ -210,26 +211,37 @@ export function DocumentEditorScreen() {
   const inputRef = useRef<TextInput>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Last value successfully written to disk (avoids redundant saves). */
+  const lastSavedRef = useRef<string | null>(null);
+  /** Latest text, readable from the unmount cleanup without stale closures. */
+  const markdownRef = useRef("");
 
   const s = useMemo(() => makeStyles(colors, layout.horizontalPadding), [colors, layout]);
 
+  // Load once per document. `book` is only used for the title fallback, so it
+  // must not retrigger the load (that would discard in-progress edits).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: load once per bookId
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      let errMsg = "";
       try {
         const mdPath = await getMdPath(bookId);
         const platform = getPlatformService();
         const bytes = await platform.readFile(mdPath);
         const decoder = new TextDecoder("utf-8");
         if (!cancelled) {
-          setMarkdown(decoder.decode(bytes));
+          const text = decoder.decode(bytes);
+          setMarkdown(text);
+          markdownRef.current = text;
+          lastSavedRef.current = text;
           setIsLoading(false);
         }
       } catch (err) {
         console.warn("[DocumentEditor] Failed to load markdown:", err);
         if (!cancelled) {
-          setMarkdown(book?.meta.title ? `# ${book.meta.title}` : "# Untitled");
+          const fallback = book?.meta.title ? `# ${book.meta.title}` : "# Untitled";
+          setMarkdown(fallback);
+          markdownRef.current = fallback;
           setIsLoading(false);
         }
       }
@@ -239,22 +251,41 @@ export function DocumentEditorScreen() {
     };
   }, [bookId]);
 
-  const debouncedSave = useCallback(() => {
+  /** Write the document. Empty documents are never persisted. */
+  const persist = useCallback(
+    async (value: string, options?: { silent?: boolean }): Promise<boolean> => {
+      if (!value.trim()) return false;
+      try {
+        await saveDocument(bookId, value);
+        lastSavedRef.current = value;
+        return true;
+      } catch (err) {
+        console.warn("[DocumentEditor] Save failed:", err);
+        if (!options?.silent) {
+          Alert.alert(t("library.editor.saveError", "保存失败"), String(err));
+        }
+        return false;
+      }
+    },
+    [bookId, saveDocument, t],
+  );
+
+  // Debounced auto-save driven by the value itself, so the timer always writes
+  // the latest text (the previous closure-based debounce dropped the last edit).
+  useEffect(() => {
+    if (isLoading) return;
+    markdownRef.current = markdown;
+    if (lastSavedRef.current === markdown) return;
+    if (!markdown.trim()) return;
+
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      saveDocument(bookId, markdown).catch((err) => {
-        console.warn("[DocumentEditor] Auto-save failed:", err);
-      });
+      void persist(markdown, { silent: true });
     }, 3000);
-  }, [bookId, markdown, saveDocument]);
-
-  const handleChangeText = useCallback(
-    (text: string) => {
-      setMarkdown(text);
-      debouncedSave();
-    },
-    [debouncedSave],
-  );
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [markdown, isLoading, persist]);
 
   // Auto-save on app background / inactive
   useEffect(() => {
@@ -262,36 +293,39 @@ export function DocumentEditorScreen() {
       if (nextState === "background" || nextState === "inactive") {
         if (isLoading) return; // skip save while still loading
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-        saveDocument(bookId, markdown).catch((err) => {
-          console.warn("[DocumentEditor] Background auto-save failed:", err);
-        });
+        void persist(markdownRef.current, { silent: true });
       }
     });
     return () => {
       subscription.remove();
     };
-  }, [bookId, markdown, saveDocument, isLoading]);
+  }, [persist, isLoading]);
 
-  // Cleanup timer on unmount
+  // Flush pending edits when leaving the screen (back button, tab switch, …).
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      const value = markdownRef.current;
+      if (value.trim() && lastSavedRef.current !== value) {
+        void persist(value, { silent: true });
+      }
     };
-  }, []);
+  }, [persist]);
 
   const handleSave = useCallback(async () => {
     if (isSaving) return;
+    if (!markdown.trim()) {
+      Alert.alert("无法保存", "文档内容为空，至少写入一行文字后再保存。");
+      return;
+    }
     setIsSaving(true);
     try {
-      await saveDocument(bookId, markdown);
-      Alert.alert("", t("library.editor.saved", "已保存"));
-    } catch (err) {
-      console.error("[DocumentEditor] Save failed:", err);
-      Alert.alert(t("library.editor.saveError", "保存失败"), String(err));
+      const saved = await persist(markdown);
+      if (saved) Alert.alert("", t("library.editor.saved", "已保存"));
     } finally {
       setIsSaving(false);
     }
-  }, [bookId, markdown, saveDocument, isSaving, t]);
+  }, [isSaving, markdown, persist, t]);
 
   const handleToolbarAction = useCallback(
     (syntax: { prefix: string; suffix: string; placeholder: string }) => {
@@ -329,14 +363,16 @@ export function DocumentEditorScreen() {
         <View style={s.headerActions}>
           <TouchableOpacity
             style={s.headerBtn}
-            onPress={() => nav.navigate("Reader", { bookId })}
+            onPress={async () => {
+              // The reader opens the derived EPUB: persist pending edits first.
+              if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+              await persist(markdown, { silent: true });
+              nav.navigate("Reader", { bookId });
+            }}
           >
             <BookOpenIcon size={18} color={colors.mutedForeground} />
           </TouchableOpacity>
-          <TouchableOpacity
-            style={s.headerBtn}
-            onPress={() => setIsPreview(!isPreview)}
-          >
+          <TouchableOpacity style={s.headerBtn} onPress={() => setIsPreview(!isPreview)}>
             {isPreview ? (
               <EditIcon size={18} color={colors.mutedForeground} />
             ) : (
@@ -379,13 +415,17 @@ export function DocumentEditorScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={s.toolbarBtn}
-            onPress={() => handleToolbarAction({ prefix: "\n# ", suffix: "", placeholder: "Heading 1" })}
+            onPress={() =>
+              handleToolbarAction({ prefix: "\n# ", suffix: "", placeholder: "Heading 1" })
+            }
           >
             <Text style={s.toolbarBtnText}>H1</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={s.toolbarBtn}
-            onPress={() => handleToolbarAction({ prefix: "\n## ", suffix: "", placeholder: "Heading 2" })}
+            onPress={() =>
+              handleToolbarAction({ prefix: "\n## ", suffix: "", placeholder: "Heading 2" })
+            }
           >
             <Text style={s.toolbarBtnText}>H2</Text>
           </TouchableOpacity>
@@ -397,7 +437,9 @@ export function DocumentEditorScreen() {
           </TouchableOpacity>
           <TouchableOpacity
             style={s.toolbarBtn}
-            onPress={() => handleToolbarAction({ prefix: "[", suffix: "](url)", placeholder: "text" })}
+            onPress={() =>
+              handleToolbarAction({ prefix: "[", suffix: "](url)", placeholder: "text" })
+            }
           >
             <Text style={s.toolbarBtnText}>🔗</Text>
           </TouchableOpacity>
@@ -417,7 +459,7 @@ export function DocumentEditorScreen() {
             ref={inputRef}
             style={s.editor}
             value={markdown}
-            onChangeText={handleChangeText}
+            onChangeText={setMarkdown}
             onSelectionChange={(e) => {
               selectionRef.current = e.nativeEvent.selection;
             }}
