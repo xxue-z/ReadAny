@@ -256,10 +256,11 @@ export function DocumentEditorScreen() {
     [debouncedSave],
   );
 
-  // Auto-save on app background
+  // Auto-save on app background / inactive
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "background" || nextState === "inactive") {
+        if (isLoading) return; // skip save while still loading
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         saveDocument(bookId, markdown).catch((err) => {
           console.warn("[DocumentEditor] Background auto-save failed:", err);
@@ -269,7 +270,7 @@ export function DocumentEditorScreen() {
     return () => {
       subscription.remove();
     };
-  }, [bookId, markdown, saveDocument]);
+  }, [bookId, markdown, saveDocument, isLoading]);
 
   // Cleanup timer on unmount
   useEffect(() => {
