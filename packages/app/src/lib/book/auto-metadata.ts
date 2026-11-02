@@ -20,7 +20,9 @@ async function extractEpubOpfMetadata(bytes: Uint8Array): Promise<ExtractedBookM
   const { configure, ZipReader, BlobReader, TextWriter } = await import("@zip.js/zip.js");
   configure({ useWebWorkers: false });
 
-  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  // Copy into a fresh ArrayBuffer so SharedArrayBuffer-backed views are accepted
+  // by BlobPart (and to avoid sharing memory with the caller).
+  const buffer = new Uint8Array(bytes).buffer;
   const reader = new ZipReader(new BlobReader(new Blob([buffer])));
 
   try {

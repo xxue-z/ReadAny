@@ -17,7 +17,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
 import { useAppStore } from "@/stores/app-store";
-import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { useSyncStore } from "@/stores/sync-store";
 import { cn } from "@readany/core/utils";
