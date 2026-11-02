@@ -116,3 +116,22 @@ export {
   updateSkill,
   deleteSkill,
 } from "./skill-queries";
+
+export type { QuizSession, QuizQuestion, QuestionBankEntry, QuizConfig } from "../types/quiz";
+export {
+  insertQuizSession,
+  getQuizSession,
+  getQuizSessions,
+  updateQuizSession,
+} from "./quiz-queries";
+export {
+  insertQuizQuestions,
+  getQuizQuestions,
+  updateQuizQuestion,
+} from "./quiz-queries";
+export {
+  insertQuestionBankEntry,
+  getQuestionBank,
+  updateQuestionBankEntry,
+  stemHash,
+} from "./quiz-queries";
