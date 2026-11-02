@@ -15,13 +15,12 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import type { RouteProp } from "@react-navigation/native";
 import { getPlatformService } from "@readany/core/services";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   Alert,
   Platform,
-  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -171,6 +170,35 @@ function getEpubPath(bookId: string): Promise<string> {
   })();
 }
 
+// Helper: insert Markdown syntax at cursor position
+function applyMarkdownSyntax(
+  text: string,
+  selection: { start: number; end: number },
+  syntax: { prefix: string; suffix: string; placeholder: string },
+): { text: string; cursorPos: number } {
+  const selectedText = text.slice(selection.start, selection.end);
+  if (selectedText.length > 0) {
+    const newText =
+      text.slice(0, selection.start) +
+      syntax.prefix +
+      selectedText +
+      syntax.suffix +
+      text.slice(selection.end);
+    return {
+      text: newText,
+      cursorPos: selection.start + syntax.prefix.length + selectedText.length + syntax.suffix.length,
+    };
+  }
+  const newText =
+    text.slice(0, selection.start) +
+    syntax.prefix +
+    syntax.placeholder +
+    syntax.suffix +
+    text.slice(selection.end);
+  const cursorPos = selection.start + syntax.prefix.length + syntax.placeholder.length;
+  return { text: newText, cursorPos };
+}
+
 export function DocumentEditorScreen() {
   const colors = useColors();
   const { t } = useTranslation();
@@ -185,6 +213,9 @@ export function DocumentEditorScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isPreview, setIsPreview] = useState(route.params.initialPreview ?? false);
   const [isSaving, setIsSaving] = useState(false);
+
+  const inputRef = useRef<TextInput>(null);
+  const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
 
   const s = useMemo(() => makeStyles(colors, layout.horizontalPadding), [colors, layout]);
 
@@ -244,6 +275,21 @@ export function DocumentEditorScreen() {
     }
   }, [markdown, bookId, book?.meta, updateBook, isSaving, t]);
 
+  const handleToolbarAction = useCallback(
+    (syntax: { prefix: string; suffix: string; placeholder: string }) => {
+      const sel = selectionRef.current;
+      const result = applyMarkdownSyntax(markdown, sel, syntax);
+      setMarkdown(result.text);
+      // Set cursor after the state update
+      setTimeout(() => {
+        inputRef.current?.setNativeProps({
+          selection: { start: result.cursorPos, end: result.cursorPos },
+        });
+      }, 0);
+    },
+    [markdown],
+  );
+
   if (!bookId) {
     return (
       <SafeAreaView style={s.container}>
@@ -287,6 +333,53 @@ export function DocumentEditorScreen() {
         </View>
       </View>
 
+      {/* Toolbar */}
+      {!isLoading && !isPreview ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={s.toolbar}
+          contentContainerStyle={s.toolbarContent}
+        >
+          <TouchableOpacity
+            style={s.toolbarBtn}
+            onPress={() => handleToolbarAction({ prefix: "**", suffix: "**", placeholder: "bold" })}
+          >
+            <Text style={[s.toolbarBtnText, { fontWeight: "700" }]}>B</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={s.toolbarBtn}
+            onPress={() => handleToolbarAction({ prefix: "*", suffix: "*", placeholder: "italic" })}
+          >
+            <Text style={[s.toolbarBtnText, { fontStyle: "italic" }]}>I</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={s.toolbarBtn}
+            onPress={() => handleToolbarAction({ prefix: "\n# ", suffix: "", placeholder: "Heading 1" })}
+          >
+            <Text style={s.toolbarBtnText}>H1</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={s.toolbarBtn}
+            onPress={() => handleToolbarAction({ prefix: "\n## ", suffix: "", placeholder: "Heading 2" })}
+          >
+            <Text style={s.toolbarBtnText}>H2</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={s.toolbarBtn}
+            onPress={() => handleToolbarAction({ prefix: "\n- ", suffix: "", placeholder: "item" })}
+          >
+            <Text style={s.toolbarBtnText}>•</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={s.toolbarBtn}
+            onPress={() => handleToolbarAction({ prefix: "[", suffix: "](url)", placeholder: "text" })}
+          >
+            <Text style={s.toolbarBtnText}>🔗</Text>
+          </TouchableOpacity>
+        </ScrollView>
+      ) : null}
+
       {/* Content */}
       {isLoading ? (
         <View style={s.loadingContainer}>
@@ -297,9 +390,13 @@ export function DocumentEditorScreen() {
       ) : (
         <KeyboardAwareScrollView style={{ flex: 1 }}>
           <TextInput
+            ref={inputRef}
             style={s.editor}
             value={markdown}
             onChangeText={setMarkdown}
+            onSelectionChange={(e) => {
+              selectionRef.current = e.nativeEvent.selection;
+            }}
             multiline
             textAlignVertical="top"
             placeholder="# Title"
@@ -353,6 +450,31 @@ const makeStyles = (colors: ThemeColors, hPad: number) =>
       minHeight: 400,
     },
     loadingContainer: { flex: 1, alignItems: "center", justifyContent: "center" },
+    toolbar: {
+      maxHeight: 44,
+      borderBottomWidth: 0.5,
+      borderBottomColor: colors.border,
+      backgroundColor: withOpacity(colors.muted, 0.3),
+    },
+    toolbarContent: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 8,
+      gap: 2,
+    },
+    toolbarBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 8,
+      borderRadius: radius.md,
+      alignItems: "center",
+      justifyContent: "center",
+      minWidth: 36,
+    },
+    toolbarBtnText: {
+      fontSize: 14,
+      fontWeight: fontWeight.medium,
+      color: colors.foreground,
+    },
     errorText: {
       fontSize: fontSize.lg,
       color: colors.mutedForeground,
