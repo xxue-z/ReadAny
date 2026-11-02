@@ -7,6 +7,7 @@ import {
   TrophyIcon,
 } from "@/components/ui/Icon";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
+import { getQuizFailureMessage, hasUsableAIConfig } from "@/lib/quiz/quiz-error";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
 import { type ThemeColors, fontSize, fontWeight, radius, useColors } from "@/styles/theme";
 import { useNavigation, useRoute } from "@react-navigation/native";
@@ -14,10 +15,13 @@ import type { RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getQuizSession } from "@readany/core/db/quiz-queries";
 import { buildQuizReport } from "@readany/core/quiz/report-builder";
+import { useQuizStore } from "@readany/core/stores/quiz-store";
+import { useSettingsStore } from "@readany/core/stores/settings-store";
 import type { QuizReport, QuizSession } from "@readany/core/types/quiz";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -37,8 +41,9 @@ const TYPE_LABELS: Record<string, string> = {
   short_answer: "简答",
 };
 
-function formatDuration(ms: number): string {
-  const totalSeconds = Math.floor(ms / 1000);
+/** `timeSpent` is stored in seconds (same unit as the desktop report). */
+function formatDuration(seconds: number): string {
+  const totalSeconds = Math.max(0, Math.floor(seconds));
   const min = Math.floor(totalSeconds / 60);
   const sec = totalSeconds % 60;
   if (min > 0) return `${min}分${sec}秒`;
@@ -98,6 +103,26 @@ export default function QuizReportScreen() {
       .finally(() => setLoading(false));
   }, [sessionId]);
 
+  /** Re-run the same configuration so the report is not a dead end. */
+  const handleRestart = useCallback(async () => {
+    if (!session) return;
+    const { aiConfig } = useSettingsStore.getState();
+    if (!hasUsableAIConfig(aiConfig)) {
+      Alert.alert("未配置 AI", "请先在设置中配置 AI 端点与模型。");
+      return;
+    }
+    try {
+      await useQuizStore.getState().startQuiz(session.config, aiConfig);
+      const nextSessionId = useQuizStore.getState().currentSession?.id;
+      if (nextSessionId) {
+        nav.replace("QuizPlayer", { sessionId: nextSessionId });
+      }
+    } catch (err) {
+      console.error("[QuizReport] restart:", err);
+      Alert.alert("生成测验失败", getQuizFailureMessage(err));
+    }
+  }, [session, nav]);
+
   // -- Render helpers -------------------------------------------------------
 
   const renderScoreCard = () => {
@@ -122,7 +147,7 @@ export default function QuizReportScreen() {
           <View style={s.scoreStatItem}>
             <CheckCheckIcon size={16} color={colors.emerald} />
             <Text style={s.scoreStatValue}>
-              {summary.correctCount}/{summary.totalQuestions}
+              {summary.correctCount}/{summary.gradableCount}
             </Text>
             <Text style={s.scoreStatLabel}>正确</Text>
           </View>
@@ -151,6 +176,28 @@ export default function QuizReportScreen() {
             {formatDate(session.createdAt)}
           </Text>
         )}
+
+        {summary.pendingCount > 0 && (
+          <Text style={[s.sessionMeta, { color: colors.amber }]}>
+            待批改（简答题）：{summary.pendingCount} 题
+          </Text>
+        )}
+
+        <TouchableOpacity
+          style={{
+            marginTop: 12,
+            alignSelf: "center",
+            paddingHorizontal: 18,
+            paddingVertical: 10,
+            borderRadius: radius.md,
+            backgroundColor: colors.primary,
+          }}
+          onPress={() => void handleRestart()}
+        >
+          <Text style={{ color: colors.primaryForeground, fontWeight: fontWeight.semibold }}>
+            再来一次
+          </Text>
+        </TouchableOpacity>
       </View>
     );
   };

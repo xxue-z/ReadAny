@@ -73,10 +73,7 @@ export async function getQuizSessions(limit = 50): Promise<QuizSession[]> {
   }));
 }
 
-export async function updateQuizSession(
-  id: string,
-  updates: Partial<QuizSession>,
-): Promise<void> {
+export async function updateQuizSession(id: string, updates: Partial<QuizSession>): Promise<void> {
   const database = await getDB();
   const sets: string[] = [];
   const values: unknown[] = [];
@@ -108,10 +105,7 @@ export async function updateQuizSession(
 
   if (sets.length === 0) return;
   values.push(id);
-  await database.execute(
-    `UPDATE quiz_sessions SET ${sets.join(", ")} WHERE id = ?`,
-    values,
-  );
+  await database.execute(`UPDATE quiz_sessions SET ${sets.join(", ")} WHERE id = ?`, values);
 }
 
 // ---------------------------------------------------------------------------
@@ -142,23 +136,23 @@ export async function insertQuizQuestions(questions: QuizQuestion[]): Promise<vo
   }
 }
 
-export async function getQuizQuestions(sessionId: string): Promise<QuizQuestion[]> {
-  const database = await getDB();
-  const rows = await database.select<{
-    id: string;
-    session_id: string;
-    type: string;
-    stem: string;
-    options: string | null;
-    answer: string;
-    source_book_id: string | null;
-    source_chapter: string | null;
-    difficulty: number;
-    user_answer: string | null;
-    is_correct: number | null;
-    created_at: number;
-  }>("SELECT * FROM quiz_questions WHERE session_id = ? ORDER BY created_at ASC", [sessionId]);
-  return rows.map((r) => ({
+interface QuizQuestionRow {
+  id: string;
+  session_id: string;
+  type: string;
+  stem: string;
+  options: string | null;
+  answer: string;
+  source_book_id: string | null;
+  source_chapter: string | null;
+  difficulty: number;
+  user_answer: string | null;
+  is_correct: number | null;
+  created_at: number;
+}
+
+function mapQuestionRow(r: QuizQuestionRow): QuizQuestion {
+  return {
     id: r.id,
     sessionId: r.session_id,
     type: r.type as QuizQuestion["type"],
@@ -171,7 +165,90 @@ export async function getQuizQuestions(sessionId: string): Promise<QuizQuestion[
     userAnswer: r.user_answer ? JSON.parse(r.user_answer) : undefined,
     isCorrect: r.is_correct != null ? r.is_correct === 1 : undefined,
     createdAt: r.created_at,
-  }));
+  };
+}
+
+export async function getQuizQuestions(sessionId: string): Promise<QuizQuestion[]> {
+  const database = await getDB();
+  const rows = await database.select<QuizQuestionRow>(
+    "SELECT * FROM quiz_questions WHERE session_id = ? ORDER BY created_at ASC",
+    [sessionId],
+  );
+  return rows.map(mapQuestionRow);
+}
+
+/**
+ * Pick questions that already live in the question bank, preferring the ones
+ * with the lowest correct rate / lowest usage so weak material resurfaces.
+ */
+export async function getBankQuestionsForQuiz(options: {
+  limit: number;
+  bookIds?: string[];
+}): Promise<QuizQuestion[]> {
+  const limit = Math.max(0, Math.floor(options.limit));
+  if (limit === 0) return [];
+
+  const database = await getDB();
+  const values: unknown[] = [];
+  let bookFilter = "";
+  if (options.bookIds && options.bookIds.length > 0) {
+    bookFilter = ` AND qq.source_book_id IN (${options.bookIds.map(() => "?").join(",")})`;
+    values.push(...options.bookIds);
+  }
+  values.push(limit);
+
+  const rows = await database.select<QuizQuestionRow & { tags: string | null }>(
+    `SELECT qq.*, qb.tags AS tags
+     FROM question_bank qb
+     JOIN quiz_questions qq ON qb.question_id = qq.id
+     WHERE 1 = 1${bookFilter}
+     ORDER BY COALESCE(qb.correct_rate, 1) ASC, COALESCE(qb.usage_count, 0) ASC, RANDOM()
+     LIMIT ?`,
+    values,
+  );
+
+  return rows.map((row) => {
+    const question = mapQuestionRow(row);
+    let tags: string[] = [];
+    if (row.tags) {
+      try {
+        const parsed = JSON.parse(row.tags);
+        if (Array.isArray(parsed)) {
+          tags = parsed.filter((t): t is string => typeof t === "string");
+        }
+      } catch {
+        tags = [];
+      }
+    }
+    return { ...question, tags };
+  });
+}
+
+/** Pick previously answered-but-wrong questions (optionally scoped to books). */
+export async function getWrongQuestionsForQuiz(options: {
+  limit: number;
+  bookIds?: string[];
+}): Promise<QuizQuestion[]> {
+  const limit = Math.max(0, Math.floor(options.limit));
+  if (limit === 0) return [];
+
+  const database = await getDB();
+  const values: unknown[] = [];
+  let bookFilter = "";
+  if (options.bookIds && options.bookIds.length > 0) {
+    bookFilter = ` AND source_book_id IN (${options.bookIds.map(() => "?").join(",")})`;
+    values.push(...options.bookIds);
+  }
+  values.push(limit);
+
+  const rows = await database.select<QuizQuestionRow>(
+    `SELECT * FROM quiz_questions
+     WHERE is_correct = 0${bookFilter}
+     ORDER BY created_at DESC
+     LIMIT ?`,
+    values,
+  );
+  return rows.map(mapQuestionRow);
 }
 
 export async function updateQuizQuestion(
@@ -209,10 +286,7 @@ export async function updateQuizQuestion(
 
   if (sets.length === 0) return;
   values.push(id);
-  await database.execute(
-    `UPDATE quiz_questions SET ${sets.join(", ")} WHERE id = ?`,
-    values,
-  );
+  await database.execute(`UPDATE quiz_questions SET ${sets.join(", ")} WHERE id = ?`, values);
 }
 
 // ---------------------------------------------------------------------------
@@ -236,16 +310,20 @@ export async function insertQuestionBankEntry(entry: QuestionBankEntry): Promise
   );
 }
 
-export async function getQuestionBank(
-  query?: { bookId?: string; tags?: string[]; type?: string },
-): Promise<QuestionBankEntry[]> {
+export async function getQuestionBank(query?: {
+  bookId?: string;
+  tags?: string[];
+  type?: string;
+}): Promise<QuestionBankEntry[]> {
   const database = await getDB();
   const conditions: string[] = [];
   const values: unknown[] = [];
 
   if (query?.bookId) {
     // question_bank entries are linked via question_id -> quiz_questions.source_book_id
-    conditions.push("qb.question_id IN (SELECT qq.id FROM quiz_questions qq WHERE qq.source_book_id = ?)");
+    conditions.push(
+      "qb.question_id IN (SELECT qq.id FROM quiz_questions qq WHERE qq.source_book_id = ?)",
+    );
     values.push(query.bookId);
   }
   if (query?.type) {
@@ -262,7 +340,17 @@ export async function getQuestionBank(
     correct_rate: number | null;
     variant_of: string | null;
     created_at: number;
-  }>(`SELECT qb.* FROM question_bank qb ${where} ORDER BY qb.created_at DESC`, values);
+    stem: string | null;
+    type: string | null;
+    difficulty: number | null;
+    source_book_id: string | null;
+  }>(
+    `SELECT qb.*, qq.stem, qq.type, qq.difficulty, qq.source_book_id
+     FROM question_bank qb
+     LEFT JOIN quiz_questions qq ON qb.question_id = qq.id
+     ${where} ORDER BY qb.created_at DESC`,
+    values,
+  );
 
   // Filter by tags after fetching (tags are JSON arrays in DB)
   let results = rows.map((r) => ({
@@ -273,15 +361,92 @@ export async function getQuestionBank(
     correctRate: r.correct_rate ?? 0,
     variantOf: r.variant_of ?? undefined,
     createdAt: r.created_at,
+    stem: r.stem ?? undefined,
+    questionType: (r.type as QuestionBankEntry["questionType"]) ?? undefined,
+    difficulty: r.difficulty ?? undefined,
+    sourceBookId: r.source_book_id ?? undefined,
   }));
 
   if (query?.tags && query.tags.length > 0) {
-    results = results.filter((entry) =>
-      query.tags!.some((tag) => entry.tags.includes(tag)),
-    );
+    results = results.filter((entry) => query.tags!.some((tag) => entry.tags.includes(tag)));
   }
 
   return results;
+}
+
+/**
+ * Persist newly generated questions into the question bank.
+ *
+ * Duplicate stems (already in the bank) are skipped so re-used bank questions
+ * never get double-counted. Returns the number of inserted entries.
+ */
+export async function insertQuestionBankEntries(
+  questions: QuizQuestion[],
+  options?: { createdAt?: number },
+): Promise<number> {
+  if (questions.length === 0) return 0;
+  const database = await getDB();
+
+  const existing = await database.select<{ stem: string }>(
+    `SELECT qq.stem FROM question_bank qb
+     JOIN quiz_questions qq ON qb.question_id = qq.id`,
+  );
+  const existingHashes = new Set(existing.map((row) => stemHash(row.stem)));
+
+  const now = options?.createdAt ?? Date.now();
+  let inserted = 0;
+  for (const question of questions) {
+    const hash = stemHash(question.stem);
+    if (existingHashes.has(hash)) continue;
+    existingHashes.add(hash);
+    await database.execute(
+      `INSERT INTO question_bank (id, question_id, tags, usage_count, correct_rate, variant_of, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [`bank-${question.id}`, question.id, JSON.stringify(question.tags ?? []), 0, null, null, now],
+    );
+    inserted++;
+  }
+  return inserted;
+}
+
+/**
+ * Update usage counters / rolling correct rate for the questions of a session.
+ * Called when a session is graded so the bank reflects real performance.
+ */
+export async function updateQuestionBankStats(questions: QuizQuestion[]): Promise<void> {
+  if (questions.length === 0) return;
+  const database = await getDB();
+
+  for (const question of questions) {
+    const rows = await database.select<{
+      id: string;
+      usage_count: number;
+      correct_rate: number | null;
+    }>("SELECT id, usage_count, correct_rate FROM question_bank WHERE question_id = ?", [
+      question.id,
+    ]);
+    const entry = rows[0];
+    if (!entry) continue;
+
+    if (question.isCorrect === undefined) {
+      await database.execute("UPDATE question_bank SET usage_count = ? WHERE id = ?", [
+        entry.usage_count + 1,
+        entry.id,
+      ]);
+      continue;
+    }
+
+    const attemptCorrect = question.isCorrect ? 1 : 0;
+    const previousRate = entry.correct_rate;
+    const nextRate =
+      previousRate == null
+        ? attemptCorrect
+        : (previousRate * entry.usage_count + attemptCorrect) / (entry.usage_count + 1);
+    await database.execute(
+      "UPDATE question_bank SET usage_count = ?, correct_rate = ? WHERE id = ?",
+      [entry.usage_count + 1, nextRate, entry.id],
+    );
+  }
 }
 
 export async function updateQuestionBankEntry(
@@ -311,10 +476,7 @@ export async function updateQuestionBankEntry(
 
   if (sets.length === 0) return;
   values.push(id);
-  await database.execute(
-    `UPDATE question_bank SET ${sets.join(", ")} WHERE id = ?`,
-    values,
-  );
+  await database.execute(`UPDATE question_bank SET ${sets.join(", ")} WHERE id = ?`, values);
 }
 
 // ---------------------------------------------------------------------------
@@ -327,7 +489,7 @@ export function stemHash(stem: string): string {
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
     const char = normalized.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash |= 0;
   }
   return `${normalized.slice(0, 32)}_${Math.abs(hash).toString(16)}`;

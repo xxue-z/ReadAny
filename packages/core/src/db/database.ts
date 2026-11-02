@@ -128,9 +128,13 @@ export {
   insertQuizQuestions,
   getQuizQuestions,
   updateQuizQuestion,
+  getBankQuestionsForQuiz,
+  getWrongQuestionsForQuiz,
 } from "./quiz-queries";
 export {
   insertQuestionBankEntry,
+  insertQuestionBankEntries,
+  updateQuestionBankStats,
   getQuestionBank,
   updateQuestionBankEntry,
   stemHash,

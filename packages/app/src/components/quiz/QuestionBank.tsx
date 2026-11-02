@@ -11,10 +11,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { getQuestionBank } from "@readany/core/db/database";
-import type { QuestionBankEntry } from "@readany/core/types";
-import { BookOpen, Hash, Search, Tag } from "lucide-react";
+import type { QuestionBankEntry, QuestionType } from "@readany/core/types";
+import { BookOpen, Search, Tag } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+
+const TYPE_LABELS: Record<QuestionType, string> = {
+  single_choice: "单选题",
+  multi_choice: "多选题",
+  true_false: "判断题",
+  short_answer: "简答题",
+};
 
 const ALL_TAGS = [
   "vocabulary",
@@ -66,9 +73,6 @@ export function QuestionBank() {
         e.tags.some((tg) => tg.toLowerCase().includes(lower)) || e.id.toLowerCase().includes(lower),
     );
   }, [entries, searchQuery]);
-
-  const _typeLabel = (t: keyof typeof QUESTION_TYPE_LABELS | string) =>
-    QUESTION_TYPE_LABELS[t] ?? t;
 
   return (
     <div className="flex flex-col gap-4 py-2">
@@ -137,6 +141,18 @@ export function QuestionBank() {
               key={entry.id}
               className="flex flex-col gap-2 rounded-lg border bg-card p-4 transition-colors hover:bg-muted/30"
             >
+              {/* Stem + type (joined from quiz_questions) */}
+              <div className="flex items-start gap-2">
+                <p className="flex-1 text-sm font-medium text-foreground line-clamp-3">
+                  {entry.stem || entry.questionId}
+                </p>
+                {entry.questionType && (
+                  <Badge variant="secondary" className="shrink-0 text-[10px]">
+                    {TYPE_LABELS[entry.questionType] ?? entry.questionType}
+                  </Badge>
+                )}
+              </div>
+
               {/* Tags */}
               <div className="flex flex-wrap gap-1">
                 {entry.tags.map((tg) => (
@@ -147,12 +163,6 @@ export function QuestionBank() {
                 ))}
               </div>
 
-              {/* ID row */}
-              <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
-                <Hash className="h-3 w-3" />
-                <span className="font-mono">{entry.id.slice(0, 8)}</span>
-              </div>
-
               {/* Stats row */}
               <div className="flex items-center gap-4 text-xs text-muted-foreground">
                 <span>
@@ -161,6 +171,11 @@ export function QuestionBank() {
                 <span>
                   {t("quiz.correctRate")}: {Math.round(entry.correctRate * 100)}%
                 </span>
+                {entry.difficulty != null && (
+                  <span>
+                    {t("quiz.difficulty")}: {entry.difficulty}
+                  </span>
+                )}
               </div>
 
               {/* Variant indicator */}
@@ -176,10 +191,3 @@ export function QuestionBank() {
     </div>
   );
 }
-
-const QUESTION_TYPE_LABELS: Record<string, string> = {
-  single_choice: "Single Choice",
-  multi_choice: "Multi Choice",
-  true_false: "True/False",
-  short_answer: "Short Answer",
-};

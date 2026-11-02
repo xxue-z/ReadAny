@@ -37,6 +37,11 @@ export interface QuizQuestion {
   userAnswer?: string | string[];
   isCorrect?: boolean;
   createdAt: number;
+  /**
+   * Knowledge-point tags. Persisted in `question_bank` (not in `quiz_questions`),
+   * used by weak-area analysis and the question-bank filter.
+   */
+  tags?: string[];
 }
 
 export interface QuestionBankEntry {
@@ -47,11 +52,21 @@ export interface QuestionBankEntry {
   correctRate: number;
   variantOf?: string;
   createdAt: number;
+  /** Joined from quiz_questions for the bank browsing UI. */
+  stem?: string;
+  questionType?: QuestionType;
+  difficulty?: number;
+  sourceBookId?: string;
 }
 
 export interface QuizSummary {
   totalQuestions: number;
+  /** Questions that can be auto-graded (everything except short_answer). */
+  gradableCount: number;
+  /** Questions waiting for manual grading (short_answer without a verdict). */
+  pendingCount: number;
   correctCount: number;
+  /** Correct / gradable — short-answer questions never deflate the score. */
   correctRate: number;
   timeSpent: number;
   correctRateByType: Record<string, number>;

@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useSettingsStore } from "@/stores/settings-store";
 import { useQuizStore } from "@readany/core/stores";
 import type { HistoryTrend as HistoryTrendType, QuestionType } from "@readany/core/types";
 import { cn } from "@readany/core/utils";
@@ -20,6 +21,9 @@ import {
   XCircle,
 } from "lucide-react";
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
+import { getQuizErrorMessage, hasUsableAIConfig } from "./quiz-error";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -59,7 +63,8 @@ function ScoreRing({ rate }: { rate: number }) {
 
   return (
     <div className="relative size-24 shrink-0">
-      <svg className="size-24 -rotate-90" viewBox="0 0 96 96">
+      <svg className="size-24 -rotate-90" viewBox="0 0 96 96" role="img">
+        <title>{`正确率 ${pct}%`}</title>
         <circle cx="48" cy="48" r="38" fill="none" stroke="var(--border)" strokeWidth="6" />
         <circle
           cx="48"
@@ -133,10 +138,12 @@ function HistoryTrendBar({ history }: { history: HistoryTrendType[] }) {
 // ---------------------------------------------------------------------------
 
 export function QuizReport() {
+  const { t } = useTranslation();
   const report = useQuizStore((s) => s.report);
   const currentSession = useQuizStore((s) => s.currentSession);
   const loadSessions = useQuizStore((s) => s.loadSessions);
   const startQuiz = useQuizStore((s) => s.startQuiz);
+  const resetQuiz = useQuizStore((s) => s.resetQuiz);
 
   const [expandedQuestions, setExpandedQuestions] = useState<Set<string>>(new Set());
   const [isRestarting, setIsRestarting] = useState(false);
@@ -152,11 +159,20 @@ export function QuizReport() {
 
   const handleRestart = async () => {
     if (!currentSession) return;
+    const { aiConfig } = useSettingsStore.getState();
+    if (!hasUsableAIConfig(aiConfig)) {
+      toast.error(t("quiz.errorNoAIConfig", "请先在设置中配置 AI 端点与模型。"));
+      return;
+    }
     setIsRestarting(true);
     try {
       await loadSessions();
-      // Use the same config to generate a new quiz
-      await startQuiz(currentSession.config);
+      // Use the same config to generate a new quiz; aiConfig is required or the
+      // generator returns zero questions.
+      await startQuiz(currentSession.config, aiConfig);
+    } catch (err) {
+      console.error("[QuizReport] Failed to restart quiz:", err);
+      toast.error(getQuizErrorMessage(err, t));
     } finally {
       setIsRestarting(false);
     }
@@ -198,9 +214,16 @@ export function QuizReport() {
                 <CheckCircle className="size-4 text-emerald-500" />
                 <span className="text-sm text-muted-foreground">正确</span>
                 <span className="tabular-nums ml-auto font-medium">
-                  {summary.correctCount} / {summary.totalQuestions}
+                  {summary.correctCount} / {summary.gradableCount}
                 </span>
               </div>
+              {summary.pendingCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="size-4 text-amber-500" />
+                  <span className="text-sm text-muted-foreground">待批改（简答题）</span>
+                  <span className="tabular-nums ml-auto font-medium">{summary.pendingCount}</span>
+                </div>
+              )}
               <div className="flex items-center gap-2">
                 <Clock className="size-4 text-amber-500" />
                 <span className="text-sm text-muted-foreground">用时</span>
@@ -212,6 +235,14 @@ export function QuizReport() {
           </div>
           <Button className="w-full mt-5" onClick={handleRestart} disabled={isRestarting}>
             {isRestarting ? "正在准备..." : "再来一次"}
+          </Button>
+          <Button
+            variant="outline"
+            className="w-full mt-2"
+            onClick={resetQuiz}
+            disabled={isRestarting}
+          >
+            返回测验
           </Button>
         </div>
 

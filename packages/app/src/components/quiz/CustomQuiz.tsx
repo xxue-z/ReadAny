@@ -19,6 +19,7 @@ import { Play, Settings2 } from "lucide-react";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { getQuizErrorMessage, hasUsableAIConfig } from "./quiz-error";
 
 const QUESTION_TYPES: { key: QuestionType; label: string }[] = [
   { key: "single_choice", label: "quiz.singleChoice" },
@@ -39,6 +40,7 @@ export function CustomQuiz() {
   const [bankRatio, setBankRatio] = useState(0.3);
   const [wrongRatio, setWrongRatio] = useState(0.1);
   const [selectedBookId, setSelectedBookId] = useState<string>("all");
+  const [rangeDays, setRangeDays] = useState<number>(30);
   const [typeDistribution, setTypeDistribution] = useState<Partial<Record<QuestionType, number>>>(
     {},
   );
@@ -50,15 +52,23 @@ export function CustomQuiz() {
     }));
   };
 
+  // Preset the reading window when the quiz type changes (7 / 30 / 90 days).
+  const handleQuizTypeChange = (value: QuizConfig["type"]) => {
+    setQuizType(value);
+    if (value === "daily") setRangeDays(7);
+    else if (value === "monthly") setRangeDays(30);
+    else if (value === "quarterly") setRangeDays(90);
+  };
+
   const handleStart = useCallback(async () => {
     try {
       const { aiConfig } = useSettingsStore.getState();
-      const endpoint = aiConfig.endpoints.find((e) => e.id === aiConfig.activeEndpointId);
-      if (!endpoint || !aiConfig.activeModel) {
-        toast.error(t("quiz.noAIConfigured") || t("common.configureAI"));
+      if (!hasUsableAIConfig(aiConfig)) {
+        toast.error(t("quiz.errorNoAIConfig", "请先在设置中配置 AI 端点与模型。"));
         return;
       }
 
+      const now = Date.now();
       const config: QuizConfig = {
         type: quizType,
         questionCount,
@@ -67,12 +77,18 @@ export function CustomQuiz() {
         wrongRatio,
         bookIds: selectedBookId && selectedBookId !== "all" ? [selectedBookId] : undefined,
         typeDistribution: Object.keys(typeDistribution).length > 0 ? typeDistribution : undefined,
+        // Without a range the generator would quiz the entire reading history,
+        // so "monthly"/"quarterly" would behave like "all time".
+        timeRange:
+          rangeDays > 0 ? { start: now - rangeDays * 24 * 60 * 60 * 1000, end: now } : undefined,
       };
 
-      await startQuiz(config);
+      // Pass the active AIConfig through, otherwise the generator cannot call
+      // the model and returns zero questions.
+      await startQuiz(config, aiConfig);
     } catch (err) {
       console.error("[CustomQuiz] Failed to start quiz:", err);
-      toast.error(String(err));
+      toast.error(getQuizErrorMessage(err, t));
     }
   }, [
     quizType,
@@ -81,6 +97,7 @@ export function CustomQuiz() {
     bankRatio,
     wrongRatio,
     selectedBookId,
+    rangeDays,
     typeDistribution,
     startQuiz,
     t,
@@ -97,7 +114,10 @@ export function CustomQuiz() {
       {/* Quiz type */}
       <div className="flex flex-col gap-1.5">
         <span className="text-xs font-medium text-muted-foreground">{t("quiz.quizType")}</span>
-        <Select value={quizType} onValueChange={(v) => setQuizType(v as QuizConfig["type"])}>
+        <Select
+          value={quizType}
+          onValueChange={(v) => handleQuizTypeChange(v as QuizConfig["type"])}
+        >
           <SelectTrigger className="w-full">
             <SelectValue />
           </SelectTrigger>
@@ -106,6 +126,24 @@ export function CustomQuiz() {
             <SelectItem value="monthly">{t("quiz.monthly")}</SelectItem>
             <SelectItem value="quarterly">{t("quiz.quarterly")}</SelectItem>
             <SelectItem value="custom">{t("quiz.custom")}</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {/* Reading window */}
+      <div className="flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-muted-foreground">
+          {t("quiz.timeRange", "阅读时间范围")}
+        </span>
+        <Select value={String(rangeDays)} onValueChange={(v) => setRangeDays(Number(v))}>
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="7">{t("quiz.range7", "最近 7 天")}</SelectItem>
+            <SelectItem value="30">{t("quiz.range30", "最近 30 天")}</SelectItem>
+            <SelectItem value="90">{t("quiz.range90", "最近 90 天")}</SelectItem>
+            <SelectItem value="0">{t("quiz.rangeAll", "全部阅读记录")}</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -121,7 +159,7 @@ export function CustomQuiz() {
             <SelectItem value="all">{t("quiz.allBooks")}</SelectItem>
             {books.map((book) => (
               <SelectItem key={book.id} value={String(book.id)}>
-                {book.title}
+                {book.meta.title}
               </SelectItem>
             ))}
           </SelectContent>

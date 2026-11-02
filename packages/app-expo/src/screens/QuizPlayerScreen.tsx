@@ -12,6 +12,7 @@ import { type ThemeColors, fontSize, fontWeight, radius, useColors } from "@/sty
 import { useNavigation, useRoute } from "@react-navigation/native";
 import type { RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { answersEqual } from "@readany/core/quiz/scoring";
 import { useQuizStore } from "@readany/core/stores/quiz-store";
 import type { QuestionType } from "@readany/core/types/quiz";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -19,10 +20,14 @@ import {
   ActivityIndicator,
   Alert,
   ScrollView,
+  type StyleProp,
   StyleSheet,
   Text,
+  TextInput,
+  type TextStyle,
   TouchableOpacity,
   View,
+  type ViewStyle,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -71,6 +76,10 @@ export default function QuizPlayerScreen() {
   const [loading, setLoading] = useState(true);
   const [showExplanation, setShowExplanation] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // Multi-choice picks are staged locally and only submitted on confirm, so the
+  // user can select several options before grading.
+  const [multiSelected, setMultiSelected] = useState<string[]>([]);
+  const [shortAnswerText, setShortAnswerText] = useState("");
 
   // Load session on mount
   // biome-ignore lint/correctness/useExhaustiveDependencies: loadSession/ nav stable from store
@@ -96,10 +105,15 @@ export default function QuizPlayerScreen() {
     };
   }, [isTaking]);
 
-  // Reset explanation when question changes
+  // Reset local answer UI when the question changes.
+  // NOTE: this used to run on every render (no dependency array), which
+  // immediately cleared the explanation the user had just revealed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset only when the question changes
   useEffect(() => {
     setShowExplanation(false);
-  });
+    setMultiSelected([]);
+    setShortAnswerText("");
+  }, [currentQuestionIndex]);
 
   // Current question
   const question = currentQuestions[currentQuestionIndex] ?? null;
@@ -123,19 +137,18 @@ export default function QuizPlayerScreen() {
   const handleSelectMulti = useCallback(
     (key: string) => {
       if (!question || hasAnswered) return;
-      const current = (question.userAnswer as string[]) ?? [];
-      const next = current.includes(key) ? current.filter((k) => k !== key) : [...current, key];
-      // For multi_choice we don't auto-submit single clicks; user confirms
-      submitAnswer(question.id, next);
-      // Only show explanation if user has selected something
+      setMultiSelected((prev) =>
+        prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
+      );
     },
-    [question, hasAnswered, submitAnswer],
+    [question, hasAnswered],
   );
 
   const handleConfirmMulti = useCallback(() => {
-    if (!question) return;
+    if (!question || hasAnswered || multiSelected.length === 0) return;
+    submitAnswer(question.id, multiSelected);
     setShowExplanation(true);
-  }, [question]);
+  }, [question, hasAnswered, multiSelected, submitAnswer]);
 
   const handleGoPrev = useCallback(() => {
     if (currentQuestionIndex > 0) {
@@ -159,7 +172,7 @@ export default function QuizPlayerScreen() {
           onPress: async () => {
             setSubmitting(true);
             try {
-              await completeQuiz();
+              await completeQuiz(elapsed);
               nav.replace("QuizReport", { sessionId });
             } catch (err) {
               console.error("[QuizPlayer] completeQuiz:", err);
@@ -174,7 +187,7 @@ export default function QuizPlayerScreen() {
 
     setSubmitting(true);
     try {
-      await completeQuiz();
+      await completeQuiz(elapsed);
       nav.replace("QuizReport", { sessionId });
     } catch (err) {
       console.error("[QuizPlayer] completeQuiz:", err);
@@ -182,7 +195,7 @@ export default function QuizPlayerScreen() {
     } finally {
       setSubmitting(false);
     }
-  }, [currentQuestions, completeQuiz, nav, sessionId]);
+  }, [currentQuestions, completeQuiz, nav, sessionId, elapsed]);
 
   // -- Render ---------------------------------------------------------------
 
@@ -201,6 +214,15 @@ export default function QuizPlayerScreen() {
       <SafeAreaView style={[s.container, { backgroundColor: colors.background }]} edges={["top"]}>
         <View style={s.emptyWrap}>
           <Text style={s.emptyText}>没有题目</Text>
+          <TouchableOpacity
+            style={[s.showAnswerBtn, { borderColor: colors.primary, marginTop: 16 }]}
+            onPress={() => {
+              useQuizStore.getState().resetQuiz();
+              nav.goBack();
+            }}
+          >
+            <Text style={[s.showAnswerBtnText, { color: colors.primary }]}>返回测验</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
@@ -210,7 +232,9 @@ export default function QuizPlayerScreen() {
   const correctAnswer = question.answer.correct;
   const isMultiChoice = question.type === "multi_choice";
   const selectedKeys = isMultiChoice
-    ? ((question.userAnswer as string[]) ?? [])
+    ? hasAnswered
+      ? ((question.userAnswer as string[]) ?? [])
+      : multiSelected
     : question.userAnswer
       ? [question.userAnswer as string]
       : [];
@@ -262,21 +286,51 @@ export default function QuizPlayerScreen() {
         {/* Answer section */}
         {question.type === "short_answer" ? (
           <View style={s.shortAnswerWrap}>
-            <Text style={s.shortAnswerPlaceholder}>
-              {hasAnswered
-                ? `你的回答: ${question.userAnswer as string}`
-                : "简答题请口头作答或思考后查看答案"}
-            </Text>
-            {!hasAnswered && (
-              <TouchableOpacity
-                style={[s.showAnswerBtn, { borderColor: colors.primary }]}
-                onPress={() => {
-                  submitAnswer(question.id, "(已查看答案)");
-                  setShowExplanation(true);
-                }}
-              >
-                <Text style={[s.showAnswerBtnText, { color: colors.primary }]}>查看答案</Text>
-              </TouchableOpacity>
+            {hasAnswered ? (
+              <>
+                <Text style={s.shortAnswerPlaceholder}>
+                  你的回答: {String(question.userAnswer ?? "")}
+                </Text>
+                <Text style={[s.shortAnswerPlaceholder, { marginTop: 10 }]}>
+                  参考答案: {String(correctAnswer)}
+                </Text>
+                <Text style={[s.shortAnswerPlaceholder, { marginTop: 10, opacity: 0.7 }]}>
+                  简答题需人工评分，不计入自动得分。
+                </Text>
+              </>
+            ) : (
+              <>
+                <TextInput
+                  value={shortAnswerText}
+                  onChangeText={setShortAnswerText}
+                  placeholder="输入你的回答..."
+                  placeholderTextColor={colors.mutedForeground}
+                  multiline
+                  style={{
+                    minHeight: 96,
+                    borderWidth: 1,
+                    borderRadius: 8,
+                    borderColor: colors.border,
+                    color: colors.foreground,
+                    padding: 12,
+                    fontSize: 14,
+                    textAlignVertical: "top",
+                  }}
+                />
+                <TouchableOpacity
+                  style={[
+                    s.showAnswerBtn,
+                    { borderColor: colors.primary, opacity: shortAnswerText.trim() ? 1 : 0.5 },
+                  ]}
+                  disabled={!shortAnswerText.trim()}
+                  onPress={() => {
+                    submitAnswer(question.id, shortAnswerText.trim());
+                    setShowExplanation(true);
+                  }}
+                >
+                  <Text style={[s.showAnswerBtnText, { color: colors.primary }]}>提交回答</Text>
+                </TouchableOpacity>
+              </>
             )}
           </View>
         ) : question.type === "true_false" ? (
@@ -286,9 +340,9 @@ export default function QuizPlayerScreen() {
               { key: "false", label: "✗ 错误" },
             ].map((opt) => {
               const isSelected = selectedKeys.includes(opt.key);
-              const isCorrectOpt = correctAnswer === opt.key;
-              let optStyle = s.optionBtn;
-              let optTextStyle = s.optionText;
+              const isCorrectOpt = answersEqual(question, String(correctAnswer), opt.key);
+              let optStyle: StyleProp<ViewStyle> = s.optionBtn;
+              let optTextStyle: StyleProp<TextStyle> = s.optionText;
 
               if (hasAnswered && isSelected) {
                 if (isCorrect) {
@@ -337,8 +391,8 @@ export default function QuizPlayerScreen() {
                 ? correctAnswer.includes(opt.key)
                 : correctAnswer === opt.key;
 
-              let optStyle = s.optionBtn;
-              let optTextStyle = s.optionText;
+              let optStyle: StyleProp<ViewStyle> = s.optionBtn;
+              let optTextStyle: StyleProp<TextStyle> = s.optionText;
 
               if (hasAnswered && isSelected) {
                 if (isCorrectOpt) {
@@ -407,8 +461,9 @@ export default function QuizPlayerScreen() {
           </View>
         )}
 
-        {/* Explanation (post-answer) */}
-        {hasAnswered && showExplanation && (
+        {/* Explanation (post-answer). Short answers get the reference answer in the
+            answer section instead of a right/wrong badge. */}
+        {hasAnswered && showExplanation && question.type !== "short_answer" && (
           <View style={s.explanationWrap}>
             <View
               style={[
@@ -448,19 +503,22 @@ export default function QuizPlayerScreen() {
             </Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[s.completeBtn, submitting && s.navBtnDisabled]}
-            onPress={handleComplete}
-            disabled={submitting}
-          >
-            {submitting ? (
-              <ActivityIndicator size="small" color={colors.primaryForeground} />
-            ) : (
-              <Text style={s.completeBtnText}>
-                {currentQuestionIndex < totalQuestions - 1 ? "提交" : "完成"}
-              </Text>
-            )}
-          </TouchableOpacity>
+          {/* Completing is only offered on the last question: since answers no longer
+              auto-advance, a "提交" button mid-quiz would end the quiz while the
+              user just wanted to move on. */}
+          {currentQuestionIndex >= totalQuestions - 1 && (
+            <TouchableOpacity
+              style={[s.completeBtn, submitting && s.navBtnDisabled]}
+              onPress={handleComplete}
+              disabled={submitting}
+            >
+              {submitting ? (
+                <ActivityIndicator size="small" color={colors.primaryForeground} />
+              ) : (
+                <Text style={s.completeBtnText}>完成</Text>
+              )}
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             style={[s.navBtn, currentQuestionIndex >= totalQuestions - 1 && s.navBtnDisabled]}

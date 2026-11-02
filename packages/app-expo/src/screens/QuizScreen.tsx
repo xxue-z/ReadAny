@@ -10,13 +10,20 @@ import {
   TrophyIcon,
 } from "@/components/ui/Icon";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
+import { getQuizFailureMessage, hasUsableAIConfig } from "@/lib/quiz/quiz-error";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
 import { type ThemeColors, fontSize, fontWeight, radius, useColors } from "@/styles/theme";
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getQuestionBank } from "@readany/core/db/quiz-queries";
 import { useQuizStore } from "@readany/core/stores/quiz-store";
-import type { QuestionBankEntry, QuizConfig, QuizSession } from "@readany/core/types/quiz";
+import { useSettingsStore } from "@readany/core/stores/settings-store";
+import type {
+  QuestionBankEntry,
+  QuestionType,
+  QuizConfig,
+  QuizSession,
+} from "@readany/core/types/quiz";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -115,23 +122,52 @@ export default function QuizScreen() {
 
   const startDailyQuiz = useCallback(async () => {
     try {
+      // Resume an interrupted daily quiz instead of silently creating a new one.
+      const { sessions: knownSessions } = useQuizStore.getState();
+      const startOfDay = new Date().setHours(0, 0, 0, 0);
+      const todaysDaily = knownSessions.find(
+        (s) => s.type === "daily" && s.createdAt >= startOfDay,
+      );
+      if (todaysDaily?.status === "graded") {
+        Alert.alert("今日测验已完成", "可以明天再来，或使用「自定义测验」再练一次。");
+        return;
+      }
+      if (todaysDaily?.status === "in_progress") {
+        await useQuizStore.getState().loadSession(todaysDaily.id);
+        nav.navigate("QuizPlayer", { sessionId: todaysDaily.id });
+        return;
+      }
+
+      const { aiConfig } = useSettingsStore.getState();
+      if (!hasUsableAIConfig(aiConfig)) {
+        Alert.alert("未配置 AI", "请先在设置中配置 AI 端点与模型。");
+        return;
+      }
+
+      const now = Date.now();
       const config: QuizConfig = {
         type: "daily",
         questionCount: 10,
         difficulty: 2,
         bankRatio: 0.4,
         wrongRatio: 0.2,
+        // Daily quizzes cover the last 7 days of reading, not all history.
+        timeRange: { start: now - 7 * 24 * 60 * 60 * 1000, end: now },
       };
-      await store.startQuiz(config);
-      const sessionId = store.currentSession?.id;
+      // startQuiz needs the active AIConfig; without it the generator returns
+      // zero questions and nothing is shown to the user.
+      await useQuizStore.getState().startQuiz(config, aiConfig);
+      const sessionId = useQuizStore.getState().currentSession?.id;
       if (sessionId) {
-        nav.navigate("QuizPlayer" as never, { sessionId } as never);
+        nav.navigate("QuizPlayer", { sessionId });
+      } else {
+        Alert.alert("生成失败", "没有生成任何题目，请稍后重试。");
       }
     } catch (err) {
-      Alert.alert("错误", "生成测验失败，请重试");
+      Alert.alert("生成测验失败", getQuizFailureMessage(err));
       console.error("[Quiz] startDailyQuiz:", err);
     }
-  }, [store, nav]);
+  }, [nav]);
 
   const startCustomQuiz = useCallback(async () => {
     try {
@@ -141,6 +177,12 @@ export default function QuizScreen() {
       if (typeDistTF > 0) typeDist.true_false = typeDistTF;
       if (typeDistShort > 0) typeDist.short_answer = typeDistShort;
 
+      const { aiConfig } = useSettingsStore.getState();
+      if (!hasUsableAIConfig(aiConfig)) {
+        Alert.alert("未配置 AI", "请先在设置中配置 AI 端点与模型。");
+        return;
+      }
+
       const config: QuizConfig = {
         type: customType,
         questionCount: Number(customCount) || 10,
@@ -149,17 +191,18 @@ export default function QuizScreen() {
         bankRatio: customBankRatio,
         wrongRatio: customWrongRatio,
       };
-      await store.startQuiz(config);
-      const sessionId = store.currentSession?.id;
+      await useQuizStore.getState().startQuiz(config, aiConfig);
+      const sessionId = useQuizStore.getState().currentSession?.id;
       if (sessionId) {
-        nav.navigate("QuizPlayer" as never, { sessionId } as never);
+        nav.navigate("QuizPlayer", { sessionId });
+      } else {
+        Alert.alert("生成失败", "没有生成任何题目，请稍后重试。");
       }
     } catch (err) {
-      Alert.alert("错误", "生成测验失败，请重试");
+      Alert.alert("生成测验失败", getQuizFailureMessage(err));
       console.error("[Quiz] startCustomQuiz:", err);
     }
   }, [
-    store,
     nav,
     customType,
     customCount,
@@ -175,22 +218,19 @@ export default function QuizScreen() {
   const resumeSession = useCallback(
     async (session: QuizSession) => {
       try {
-        await store.loadSession(session.id);
-        const sessionId = store.currentSession?.id;
-        if (sessionId) {
-          nav.navigate("QuizPlayer" as never, { sessionId } as never);
-        }
+        await useQuizStore.getState().loadSession(session.id);
+        nav.navigate("QuizPlayer", { sessionId: session.id });
       } catch (err) {
         Alert.alert("错误", "加载测验失败");
         console.error("[Quiz] resumeSession:", err);
       }
     },
-    [store, nav],
+    [nav],
   );
 
   const viewReport = useCallback(
     (sessionId: string) => {
-      nav.navigate("QuizReport" as never, { sessionId } as never);
+      nav.navigate("QuizReport", { sessionId });
     },
     [nav],
   );

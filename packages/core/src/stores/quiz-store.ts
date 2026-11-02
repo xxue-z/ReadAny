@@ -2,26 +2,32 @@
  * Quiz Zustand Store — manage quiz sessions, question answering, and reports.
  *
  * Flows:
- *   1. startQuiz(config) → generateQuizQuestions() → save to DB → begin taking
+ *   1. startQuiz(config, aiConfig) → generateQuizQuestions() → save to DB → begin taking
+ *      (throws QuizGenerationError and persists nothing when it cannot produce questions)
  *   2. submitAnswer(id, answer) → auto-grade non-short_answer → persist to DB
+ *      (does not advance: the player decides when to move on so the verdict/explanation stay visible)
  *   3. completeQuiz() → buildQuizReport() → update session status → show report
  *   4. loadSessions() → list all sessions
  *   5. loadSession(id) → resume a session from DB
+ *   6. resetQuiz() → leave the report / empty player and return to setup
  */
 
 import { create } from "zustand";
-import type { AIConfig, QuizConfig, QuizQuestion, QuizReport, QuizSession } from "../types";
-import { generateQuizQuestions } from "../quiz/quiz-generator";
-import { buildQuizReport } from "../quiz/report-builder";
 import {
-  insertQuizSession,
-  insertQuizQuestions,
+  getQuizQuestions,
   getQuizSession,
   getQuizSessions,
-  getQuizQuestions,
-  updateQuizSession,
+  insertQuestionBankEntries,
+  insertQuizQuestions,
+  insertQuizSession,
+  updateQuestionBankStats,
   updateQuizQuestion,
+  updateQuizSession,
 } from "../db/quiz-queries";
+import { generateQuizQuestions } from "../quiz/quiz-generator";
+import { buildQuizReport } from "../quiz/report-builder";
+import { answersEqual } from "../quiz/scoring";
+import type { AIConfig, QuizConfig, QuizQuestion, QuizReport, QuizSession } from "../types";
 import { generateId } from "../utils/generate-id";
 
 // ---------------------------------------------------------------------------
@@ -52,20 +58,45 @@ export interface QuizState {
 
   // -- actions ---------------------------------------------------------------
 
-  /** Generate questions, create a session, save everything to DB, and start. */
-  startQuiz: (config: QuizConfig, aiConfig?: AIConfig) => Promise<void>;
+  /**
+   * Generate questions, create a session, save everything to DB, and start.
+   * Throws a {@link QuizGenerationError} when generation cannot produce any
+   * question — callers must surface it to the user instead of starting an
+   * empty quiz.
+   */
+  startQuiz: (config: QuizConfig, aiConfig: AIConfig) => Promise<void>;
 
   /** Record an answer for a specific question and auto-grade non-short_answer types. */
   submitAnswer: (questionId: string, answer: string | string[]) => void;
 
   /** Finish the quiz: build a report, persist the final score, and stop taking. */
-  completeQuiz: () => Promise<void>;
+  completeQuiz: (timeSpentSeconds?: number) => Promise<void>;
+
+  /** Return from the report (or an empty quiz) back to the setup screen. */
+  resetQuiz: () => void;
 
   /** Load all quiz sessions from DB into `sessions`. */
   loadSessions: () => Promise<void>;
 
   /** Load a specific session + its questions so the user can resume. */
   loadSession: (id: string) => Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
+// Errors
+// ---------------------------------------------------------------------------
+
+export type QuizGenerationErrorCode = "NO_AI_CONFIG" | "NO_QUESTIONS" | "GENERATION_FAILED";
+
+/** Typed failure so the UI can render a localized, actionable message. */
+export class QuizGenerationError extends Error {
+  readonly code: QuizGenerationErrorCode;
+
+  constructor(code: QuizGenerationErrorCode, message?: string) {
+    super(message ?? code);
+    this.name = "QuizGenerationError";
+    this.code = code;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -77,20 +108,8 @@ export interface QuizState {
  * Only called for single_choice / multi_choice / true_false.
  */
 function autoGrade(question: QuizQuestion, userAnswer: string | string[]): boolean {
-  const correct = question.answer.correct;
-
-  if (question.type === "multi_choice") {
-    if (!Array.isArray(userAnswer) || !Array.isArray(correct)) return false;
-    const sortedUser = [...userAnswer].sort();
-    const sortedCorrect = [...correct].sort();
-    return (
-      sortedUser.length === sortedCorrect.length &&
-      sortedUser.every((v, i) => v === sortedCorrect[i])
-    );
-  }
-
-  // single_choice / true_false — direct string equality
-  return String(userAnswer) === String(correct);
+  if (question.type === "short_answer") return false;
+  return answersEqual(question, userAnswer, question.answer.correct);
 }
 
 // ---------------------------------------------------------------------------
@@ -111,10 +130,30 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   // -------------------------------------------------------------------------
 
   startQuiz: async (config, aiConfig) => {
-    set({ isGenerating: true });
+    // Clear any previous report first: otherwise the report branch in QuizPage
+    // keeps rendering the old report even after a new quiz has been generated.
+    set({ isGenerating: true, report: null });
 
     try {
-      const questions = await generateQuizQuestions(config, aiConfig);
+      if (!aiConfig?.activeEndpointId || !aiConfig.activeModel) {
+        throw new QuizGenerationError("NO_AI_CONFIG");
+      }
+
+      let questions: QuizQuestion[];
+      try {
+        questions = await generateQuizQuestions(config, aiConfig);
+      } catch (err) {
+        console.error("[QuizStore] Question generation failed:", err);
+        throw new QuizGenerationError("GENERATION_FAILED");
+      }
+
+      if (questions.length === 0) {
+        // Do NOT persist an empty session: a graded 0-question session would
+        // mark today's daily quiz as "completed" with a 0 score and block a
+        // retry for the rest of the day.
+        throw new QuizGenerationError("NO_QUESTIONS");
+      }
+
       const sessionId = generateId();
 
       // Remap all questions to our freshly-generated session ID.
@@ -134,9 +173,13 @@ export const useQuizStore = create<QuizState>((set, get) => ({
 
       // Persist session + questions to DB.
       await insertQuizSession(session);
-      if (sessionQuestions.length > 0) {
-        await insertQuizQuestions(sessionQuestions);
-      }
+      await insertQuizQuestions(sessionQuestions);
+
+      // Register the new questions in the question bank so the bank browser,
+      // bank-ratio sampling and weak-area analysis have data to work with.
+      await insertQuestionBankEntries(sessionQuestions).catch((err) =>
+        console.warn("[QuizStore] Failed to add questions to bank:", err),
+      );
 
       set({
         currentSession: session,
@@ -156,7 +199,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   // -------------------------------------------------------------------------
 
   submitAnswer: (questionId, answer) => {
-    const { currentQuestions, currentQuestionIndex } = get();
+    const { currentQuestions } = get();
     const idx = currentQuestions.findIndex((q) => q.id === questionId);
     if (idx === -1) return;
 
@@ -179,25 +222,24 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       isCorrect: updatedQuestion.isCorrect,
     }).catch((err) => console.error("[QuizStore] Failed to persist answer:", err));
 
-    // Auto-advance to the next question unless we're on the last one.
-    const nextIndex =
-      idx === currentQuestionIndex && idx < currentQuestions.length - 1
-        ? idx + 1
-        : currentQuestionIndex;
-
-    set({
-      currentQuestions: updatedQuestions,
-      currentQuestionIndex: nextIndex,
-    });
+    // Do NOT auto-advance: the player must be able to show the correctness
+    // verdict and the explanation for the question just answered. Navigation is
+    // driven explicitly by the player (its own "next" control).
+    set({ currentQuestions: updatedQuestions });
   },
 
   // -------------------------------------------------------------------------
   // completeQuiz
   // -------------------------------------------------------------------------
 
-  completeQuiz: async () => {
+  completeQuiz: async (timeSpentSeconds) => {
     const { currentSession, currentQuestions } = get();
     if (!currentSession) return;
+
+    const timeSpent =
+      typeof timeSpentSeconds === "number" && Number.isFinite(timeSpentSeconds)
+        ? Math.max(0, Math.round(timeSpentSeconds))
+        : currentSession.timeSpent;
 
     // Persist any short_answer questions that were never submitted with
     // isCorrect = null (the grader will handle them manually or skip).
@@ -214,22 +256,52 @@ export const useQuizStore = create<QuizState>((set, get) => ({
 
     // Score is a 0–100 integer derived from the correct-rate fraction.
     const score = Math.round(report.summary.correctRate * 100);
+    const completedAt = Date.now();
 
     await updateQuizSession(currentSession.id, {
       status: "graded",
       score,
-      completedAt: Date.now(),
+      timeSpent,
+      completedAt,
     });
 
+    // Feed real performance back into the question bank.
+    await updateQuestionBankStats(currentQuestions).catch((err) =>
+      console.warn("[QuizStore] Failed to update bank stats:", err),
+    );
+
+    // Refresh the history list so "recent quizzes" reflect this session.
+    const sessions = await getQuizSessions().catch(() => get().sessions);
+
     set({
+      sessions,
       currentSession: {
         ...currentSession,
         status: "graded",
         score,
-        completedAt: Date.now(),
+        timeSpent,
+        completedAt,
       },
-      report,
+      report: {
+        ...report,
+        summary: { ...report.summary, timeSpent },
+      },
       isTaking: false,
+    });
+  },
+
+  // -------------------------------------------------------------------------
+  // resetQuiz — leave the report / empty player and return to the setup tabs
+  // -------------------------------------------------------------------------
+
+  resetQuiz: () => {
+    set({
+      currentSession: null,
+      currentQuestions: [],
+      currentQuestionIndex: 0,
+      isGenerating: false,
+      isTaking: false,
+      report: null,
     });
   },
 
@@ -251,6 +323,20 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     if (!session) return;
 
     const questions = await getQuizQuestions(id);
+
+    // A finished session opens as its report, never as a live quiz — otherwise
+    // history entries would let the user "re-answer" a graded session.
+    if (session.status === "graded" || session.status === "completed") {
+      const report = await buildQuizReport(id);
+      set({
+        currentSession: session,
+        currentQuestions: questions,
+        currentQuestionIndex: 0,
+        isTaking: false,
+        report,
+      });
+      return;
+    }
 
     // Position the user at the first unanswered question, if any.
     const firstUnanswered = questions.findIndex((q) => q.userAnswer === undefined);

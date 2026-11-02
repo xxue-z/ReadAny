@@ -1,6 +1,6 @@
-import type { QuizConfig, QuizQuestion, QuestionType } from "../types";
 import { beforeEach, describe, expect, it } from "vitest";
 import { stemHash } from "../db/quiz-queries";
+import type { QuestionType, QuizConfig, QuizQuestion } from "../types";
 import { extractJson, tryParseAsQuestions, validateAndMapQuestion } from "./quiz-generator";
 import { computeSummary } from "./report-builder";
 
@@ -332,7 +332,7 @@ describe("quiz scoring logic", () => {
       // true_false: 2 correct, 0 wrong → 1.0
       makeQuestion("tf1", "true_false", true),
       makeQuestion("tf2", "true_false", true),
-      // short_answer: 1 correct, 1 wrong → 0.5
+      // short_answer is hand-graded: never part of the automatic score
       makeQuestion("sa1", "short_answer", true),
       makeQuestion("sa2", "short_answer", false),
     ];
@@ -340,12 +340,29 @@ describe("quiz scoring logic", () => {
     const summary = computeSummary({ timeSpent: 60_000 }, questions);
 
     expect(summary.totalQuestions).toBe(9);
-    expect(summary.correctCount).toBe(6);
-    expect(summary.correctRate).toBeCloseTo(6 / 9, 5);
-
+    expect(summary.gradableCount).toBe(7);
+    expect(summary.correctCount).toBe(5);
+    expect(summary.correctRate).toBeCloseTo(5 / 7, 5);
     expect(summary.correctRateByType["single_choice"]).toBeCloseTo(0.6, 5);
     expect(summary.correctRateByType["true_false"]).toBeCloseTo(1.0, 5);
-    expect(summary.correctRateByType["short_answer"]).toBeCloseTo(0.5, 5);
+    // Short answers have no auto-graded denominator.
+    expect(summary.correctRateByType["short_answer"]).toBe(0);
+  });
+
+  it("reports unanswered short answers as pending instead of wrong", () => {
+    const questions: QuizQuestion[] = [
+      makeQuestion("sq1", "single_choice", true),
+      makeQuestion("sa1", "short_answer", undefined),
+      makeQuestion("sa2", "short_answer", undefined),
+    ];
+
+    const summary = computeSummary({ timeSpent: 30 }, questions);
+
+    expect(summary.totalQuestions).toBe(3);
+    expect(summary.pendingCount).toBe(2);
+    expect(summary.gradableCount).toBe(1);
+    expect(summary.correctRate).toBe(1);
+    expect(summary.correctCount).toBe(1);
   });
 
   it("handles empty questions array with correctRate = 0", () => {
@@ -434,11 +451,7 @@ describe("quiz template configs", () => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeQuestion(
-  id: string,
-  type: QuestionType,
-  isCorrect: boolean,
-): QuizQuestion {
+function makeQuestion(id: string, type: QuestionType, isCorrect: boolean): QuizQuestion {
   return {
     id,
     sessionId: "session-test",

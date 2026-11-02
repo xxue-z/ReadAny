@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { answersEqual } from "@readany/core/quiz/scoring";
 import { useQuizStore } from "@readany/core/stores";
 import type { QuestionType } from "@readany/core/types";
 import { cn } from "@readany/core/utils";
@@ -64,15 +65,18 @@ export function QuizPlayer() {
   const currentQuestionIndex = useQuizStore((s) => s.currentQuestionIndex);
   const submitAnswer = useQuizStore((s) => s.submitAnswer);
   const completeQuiz = useQuizStore((s) => s.completeQuiz);
+  const resetQuiz = useQuizStore((s) => s.resetQuiz);
+  const currentSession = useQuizStore((s) => s.currentSession);
 
   const [localIndex, setLocalIndex] = useState(currentQuestionIndex);
-  const [elapsed, setElapsed] = useState(0);
+  // Resume the timer from the time already spent on this session.
+  const [elapsed, setElapsed] = useState(currentSession?.timeSpent ?? 0);
   const [textareaValue, setTextareaValue] = useState("");
   const [expandedReview, setExpandedReview] = useState<Set<string>>(new Set());
   const [multiSelect, setMultiSelect] = useState<Set<string>>(new Set());
   const [isCompleting, setIsCompleting] = useState(false);
 
-  // Sync local index when store index changes (e.g. auto-advance from submitAnswer).
+  // Sync local index when the store index changes (e.g. resuming a session).
   useEffect(() => {
     setLocalIndex(currentQuestionIndex);
     setTextareaValue("");
@@ -152,14 +156,31 @@ export function QuizPlayer() {
     submitAnswer(question.id, textareaValue.trim());
   }, [question, textareaValue, submitAnswer]);
 
+  const [confirmingComplete, setConfirmingComplete] = useState(false);
+
   const handleComplete = useCallback(async () => {
     setIsCompleting(true);
     try {
-      await completeQuiz();
+      // Persist the actual answering time so the report is not always 0s.
+      await completeQuiz(elapsed);
     } finally {
       setIsCompleting(false);
     }
-  }, [completeQuiz]);
+  }, [completeQuiz, elapsed]);
+
+  const unansweredCount = useMemo(
+    () => currentQuestions.filter((q) => q.userAnswer === undefined).length,
+    [currentQuestions],
+  );
+
+  /** Ask for confirmation when questions are still unanswered. */
+  const handleCompleteClick = useCallback(() => {
+    if (unansweredCount > 0 && !confirmingComplete) {
+      setConfirmingComplete(true);
+      return;
+    }
+    void handleComplete();
+  }, [unansweredCount, confirmingComplete, handleComplete]);
 
   // -------------------------------------------------------------------
   // Computed
@@ -172,6 +193,20 @@ export function QuizPlayer() {
 
   const userHasAnswered = question?.userAnswer !== undefined;
   const isCorrect = question?.isCorrect;
+
+  // Reveal the verdict + explanation as soon as the question is answered.
+  // Intentionally keyed on id+answer: re-running on every store update would
+  // re-open panels the user just collapsed.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on id+answer
+  useEffect(() => {
+    if (!question || question.userAnswer === undefined) return;
+    setExpandedReview((prev) => {
+      if (prev.has(question.id)) return prev;
+      const next = new Set(prev);
+      next.add(question.id);
+      return next;
+    });
+  }, [question?.id, question?.userAnswer]);
 
   // The correct answer label for display
   const correctAnswerLabel = useMemo(() => {
@@ -202,8 +237,8 @@ export function QuizPlayer() {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
         <p className="text-lg">没有问题可显示</p>
-        <Button variant="outline" className="mt-4" onClick={handleComplete}>
-          完成测验
+        <Button variant="outline" className="mt-4" onClick={resetQuiz}>
+          返回测验
         </Button>
       </div>
     );
@@ -364,7 +399,8 @@ export function QuizPlayer() {
             <div className="flex gap-3">
               {(["true", "false"] as const).map((val) => {
                 const isSelected = userHasAnswered && question.userAnswer === val;
-                const isCorrectVal = userHasAnswered && question.answer.correct === val;
+                const isCorrectVal =
+                  userHasAnswered && answersEqual(question, String(question.answer.correct), val);
                 const label = val === "true" ? "✓ 正确" : "✗ 错误";
 
                 return (
@@ -495,8 +531,17 @@ export function QuizPlayer() {
             <ArrowRight className="size-4" />
           </Button>
         ) : (
-          <Button variant="default" size="sm" onClick={handleComplete} disabled={isCompleting}>
-            {isCompleting ? "提交中..." : "完成测验"}
+          <Button
+            variant={confirmingComplete ? "destructive" : "default"}
+            size="sm"
+            onClick={handleCompleteClick}
+            disabled={isCompleting}
+          >
+            {isCompleting
+              ? "提交中..."
+              : confirmingComplete
+                ? `还有 ${unansweredCount} 题未答，确认提交`
+                : "完成测验"}
           </Button>
         )}
       </div>
