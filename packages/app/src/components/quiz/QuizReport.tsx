@@ -1,3 +1,9 @@
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { useQuizStore } from "@readany/core/stores";
+import type { HistoryTrend as HistoryTrendType, QuestionType } from "@readany/core/types";
+import { cn } from "@readany/core/utils";
 /**
  * QuizReport — post-quiz statistics and question review.
  * Displays summary card, per-type breakdown, weak areas, history trend,
@@ -5,21 +11,15 @@
  */
 import {
   AlertCircle,
+  CheckCircle,
   ChevronDown,
   ChevronRight,
-  CheckCircle,
   Clock,
   Target,
   TrendingUp,
   XCircle,
 } from "lucide-react";
 import { useState } from "react";
-import type { QuestionType, HistoryTrend as HistoryTrendType } from "@readany/core/types";
-import { cn } from "@readany/core/utils";
-import { useQuizStore } from "@readany/core/stores";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -60,14 +60,7 @@ function ScoreRing({ rate }: { rate: number }) {
   return (
     <div className="relative size-24 shrink-0">
       <svg className="size-24 -rotate-90" viewBox="0 0 96 96">
-        <circle
-          cx="48"
-          cy="48"
-          r="38"
-          fill="none"
-          stroke="var(--border)"
-          strokeWidth="6"
-        />
+        <circle cx="48" cy="48" r="38" fill="none" stroke="var(--border)" strokeWidth="6" />
         <circle
           cx="48"
           cy="48"
@@ -239,8 +232,7 @@ export function QuizReport() {
               </thead>
               <tbody>
                 {Object.entries(summary.correctRateByType).map(([type, rate]) => {
-                  const typeCount =
-                    questions.filter((q) => q.type === type).length;
+                  const typeCount = questions.filter((q) => q.type === type).length;
                   return (
                     <tr key={type} className="border-t border-border">
                       <td className="px-4 py-2.5">
@@ -248,9 +240,7 @@ export function QuizReport() {
                           {TYPE_LABELS[type as QuestionType] ?? type}
                         </Badge>
                       </td>
-                      <td className="text-center px-4 py-2.5 tabular-nums">
-                        {typeCount}
-                      </td>
+                      <td className="text-center px-4 py-2.5 tabular-nums">{typeCount}</td>
                       <td className="text-center px-4 py-2.5 tabular-nums font-medium">
                         {formatRate(rate)}
                       </td>
@@ -285,10 +275,7 @@ export function QuizReport() {
             </h3>
             <div className="space-y-2">
               {weakAreas.map((wa) => (
-                <div
-                  key={wa.tag}
-                  className="flex items-center gap-3 rounded-lg border px-4 py-2.5"
-                >
+                <div key={wa.tag} className="flex items-center gap-3 rounded-lg border px-4 py-2.5">
                   <div
                     className={cn(
                       "size-2 rounded-full shrink-0",
@@ -363,9 +350,7 @@ export function QuizReport() {
                       <AlertCircle className="size-4 text-amber-400 shrink-0" />
                     )}
                     <span className="flex-1 truncate">
-                      <span className="text-muted-foreground tabular-nums mr-2">
-                        {idx + 1}.
-                      </span>
+                      <span className="text-muted-foreground tabular-nums mr-2">{idx + 1}.</span>
                       {q.stem}
                     </span>
                     <Badge variant="secondary" className="text-xs shrink-0">
@@ -378,21 +363,19 @@ export function QuizReport() {
                     {/* Options display */}
                     {q.options && q.options.length > 0 && (
                       <div>
-                        <span className="text-xs text-muted-foreground font-medium">
-                          选项：
-                        </span>
+                        <span className="text-xs text-muted-foreground font-medium">选项：</span>
                         <ul className="mt-1 space-y-0.5">
                           {q.options.map((opt) => {
-                            const isCorrectOpt =
-                              Array.isArray(q.answer.correct)
-                                ? (q.answer.correct as string[]).includes(opt.key)
-                                : q.answer.correct === opt.key;
+                            const isCorrectOpt = Array.isArray(q.answer.correct)
+                              ? (q.answer.correct as string[]).includes(opt.key)
+                              : q.answer.correct === opt.key;
                             return (
                               <li
                                 key={opt.key}
                                 className={cn(
                                   "flex items-center gap-2 text-xs px-2 py-1 rounded",
-                                  isCorrectOpt && "bg-emerald-50 dark:bg-emerald-950/20 font-medium text-emerald-700",
+                                  isCorrectOpt &&
+                                    "bg-emerald-50 dark:bg-emerald-950/20 font-medium text-emerald-700",
                                 )}
                               >
                                 <span className="tabular-nums font-semibold">{opt.key}.</span>

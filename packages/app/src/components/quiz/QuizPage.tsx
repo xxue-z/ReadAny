@@ -1,13 +1,13 @@
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useQuizStore } from "@readany/core/stores";
 /**
  * QuizPage — main quiz entry point with 3 sub-tabs.
  * Shows QuizPlayer when actively taking a quiz, and QuizReport on completion.
  */
 import { Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { useQuizStore } from "@readany/core/stores";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DailyQuiz } from "./DailyQuiz";
 import { CustomQuiz } from "./CustomQuiz";
+import { DailyQuiz } from "./DailyQuiz";
 import { QuestionBank } from "./QuestionBank";
 import { QuizPlayer } from "./QuizPlayer";
 import { QuizReport } from "./QuizReport";

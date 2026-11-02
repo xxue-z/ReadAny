@@ -10,6 +10,7 @@ import { refreshAndCountUnreadFeedback } from "@readany/core/feedback";
 import {
   BarChart3,
   BookOpen,
+  Brain,
   ChevronDown,
   ChevronRight,
   ChevronsUpDown,
@@ -26,11 +27,11 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useRef, useState, useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 interface NavItem {
-  tabType: "home" | "chat" | "notes" | "skills";
+  tabType: "home" | "chat" | "notes" | "skills" | "quiz";
   labelKey: string;
   icon: React.ComponentType<{ className?: string; size?: number }>;
   expandable?: boolean;
@@ -41,6 +42,7 @@ const NAV_ITEMS: NavItem[] = [
   { tabType: "chat", labelKey: "sidebar.chat", icon: MessageSquare },
   { tabType: "notes", labelKey: "sidebar.notes", icon: NotebookPen },
   { tabType: "skills", labelKey: "sidebar.skills", icon: Puzzle },
+  { tabType: "quiz", labelKey: "sidebar.quiz", icon: Brain },
 ];
 
 export function HomeSidebar() {
@@ -95,7 +97,7 @@ export function HomeSidebar() {
   const activeTab = useAppStore((s) => s.tabs.find((t) => t.id === activeTabId));
   const activeType = activeTab?.type ?? "home";
 
-  const handleNavClick = (tabType: "home" | "chat" | "notes" | "skills") => {
+  const handleNavClick = (tabType: "home" | "chat" | "notes" | "skills" | "quiz") => {
     if (tabType === "home") {
       setActiveTab("home");
     } else {

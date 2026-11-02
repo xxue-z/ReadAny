@@ -1,3 +1,8 @@
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useQuizStore } from "@readany/core/stores";
+import type { QuestionType } from "@readany/core/types";
+import { cn } from "@readany/core/utils";
 /**
  * QuizPlayer — question-by-question answering interface with timer,
  * auto-grading, and navigation controls.
@@ -13,11 +18,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { QuestionType } from "@readany/core/types";
-import { cn } from "@readany/core/utils";
-import { useQuizStore } from "@readany/core/stores";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -218,18 +218,13 @@ export function QuizPlayer() {
             {localIndex + 1} / {total}
           </span>
           <div className="flex items-center gap-2">
-            <Badge
-              variant="outline"
-              className={cn("text-xs border", TYPE_COLORS[question.type])}
-            >
+            <Badge variant="outline" className={cn("text-xs border", TYPE_COLORS[question.type])}>
               {TYPE_LABELS[question.type]}
             </Badge>
             <span
               className={cn(
                 "text-xs tabular-nums",
-                question.difficulty <= 2
-                  ? "text-amber-600"
-                  : "text-red-500",
+                question.difficulty <= 2 ? "text-amber-600" : "text-red-500",
               )}
               title={DIFFICULTY_LABELS[question.difficulty]}
             >
@@ -247,9 +242,7 @@ export function QuizPlayer() {
       {/* ---- Stem ---- */}
       <div className="flex-1 overflow-auto">
         <div className="px-6 py-5">
-          <p className="text-base leading-relaxed whitespace-pre-wrap">
-            {question.stem}
-          </p>
+          <p className="text-base leading-relaxed whitespace-pre-wrap">{question.stem}</p>
         </div>
 
         {/* ---- Options ---- */}
@@ -257,10 +250,8 @@ export function QuizPlayer() {
           {/* Single choice */}
           {question.type === "single_choice" &&
             question.options?.map((opt) => {
-              const isSelected =
-                userHasAnswered && question.userAnswer === opt.key;
-              const isCorrectOpt =
-                userHasAnswered && question.answer.correct === opt.key;
+              const isSelected = userHasAnswered && question.userAnswer === opt.key;
+              const isCorrectOpt = userHasAnswered && question.answer.correct === opt.key;
               const isWrong = isSelected && !isCorrect;
 
               return (
@@ -273,17 +264,14 @@ export function QuizPlayer() {
                     "w-full flex items-center gap-3 rounded-lg border px-4 py-3 text-sm text-left transition-all",
                     "hover:border-primary/50 hover:bg-accent/50",
                     "disabled:cursor-default",
-                    isCorrectOpt &&
-                      "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30",
-                    isWrong &&
-                      "border-red-400 bg-red-50 dark:bg-red-950/30",
+                    isCorrectOpt && "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30",
+                    isWrong && "border-red-400 bg-red-50 dark:bg-red-950/30",
                   )}
                 >
                   <span
                     className={cn(
                       "flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold",
-                      isCorrectOpt &&
-                        "border-emerald-400 bg-emerald-500 text-white",
+                      isCorrectOpt && "border-emerald-400 bg-emerald-500 text-white",
                       isWrong && "border-red-400 bg-red-500 text-white",
                     )}
                   >
@@ -308,8 +296,7 @@ export function QuizPlayer() {
                   Array.isArray(question.answer.correct) &&
                   (question.answer.correct as string[]).includes(opt.key);
                 const isChecked = multiSelect.has(opt.key);
-                const isSelected =
-                  userHasAnswered ? isInUserAnswer : isChecked;
+                const isSelected = userHasAnswered ? isInUserAnswer : isChecked;
 
                 return (
                   <button
@@ -321,9 +308,7 @@ export function QuizPlayer() {
                       "w-full flex items-center gap-3 rounded-lg border px-4 py-3 text-sm text-left transition-all",
                       "hover:border-primary/50 hover:bg-accent/50",
                       "disabled:cursor-default",
-                      isSelected &&
-                        !userHasAnswered &&
-                        "border-primary bg-primary/5",
+                      isSelected && !userHasAnswered && "border-primary bg-primary/5",
                       userHasAnswered &&
                         isInCorrect &&
                         "border-emerald-400 bg-emerald-50 dark:bg-emerald-950/30",
@@ -336,7 +321,9 @@ export function QuizPlayer() {
                     <span
                       className={cn(
                         "flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold",
-                        isSelected && !userHasAnswered && "border-primary bg-primary text-primary-foreground",
+                        isSelected &&
+                          !userHasAnswered &&
+                          "border-primary bg-primary text-primary-foreground",
                         userHasAnswered &&
                           isInCorrect &&
                           "border-emerald-400 bg-emerald-500 text-white",
@@ -346,11 +333,7 @@ export function QuizPlayer() {
                           "border-red-400 bg-red-500 text-white",
                       )}
                     >
-                      {isSelected && !userHasAnswered ? (
-                        <Check className="size-3.5" />
-                      ) : (
-                        opt.key
-                      )}
+                      {isSelected && !userHasAnswered ? <Check className="size-3.5" /> : opt.key}
                     </span>
                     <span className="flex-1">{opt.content}</span>
                     {userHasAnswered && isInCorrect && (
@@ -380,10 +363,8 @@ export function QuizPlayer() {
           {question.type === "true_false" && (
             <div className="flex gap-3">
               {(["true", "false"] as const).map((val) => {
-                const isSelected =
-                  userHasAnswered && question.userAnswer === val;
-                const isCorrectVal =
-                  userHasAnswered && question.answer.correct === val;
+                const isSelected = userHasAnswered && question.userAnswer === val;
+                const isCorrectVal = userHasAnswered && question.answer.correct === val;
                 const label = val === "true" ? "✓ 正确" : "✗ 错误";
 
                 return (
@@ -441,24 +422,14 @@ export function QuizPlayer() {
           {question.type === "short_answer" && userHasAnswered && (
             <div className="rounded-lg border p-4 bg-muted/30 text-sm space-y-2">
               <div>
-                <span className="font-medium text-muted-foreground">
-                  你的回答：
-                </span>
-                <p className="mt-1 whitespace-pre-wrap">
-                  {String(question.userAnswer)}
-                </p>
+                <span className="font-medium text-muted-foreground">你的回答：</span>
+                <p className="mt-1 whitespace-pre-wrap">{String(question.userAnswer)}</p>
               </div>
               <div>
-                <span className="font-medium text-muted-foreground">
-                  参考答案：
-                </span>
-                <p className="mt-1 whitespace-pre-wrap">
-                  {correctAnswerLabel}
-                </p>
+                <span className="font-medium text-muted-foreground">参考答案：</span>
+                <p className="mt-1 whitespace-pre-wrap">{correctAnswerLabel}</p>
               </div>
-              <p className="text-xs text-muted-foreground italic">
-                简答题需人工评分，请继续作答。
-              </p>
+              <p className="text-xs text-muted-foreground italic">简答题需人工评分，请继续作答。</p>
             </div>
           )}
         </div>
@@ -500,9 +471,7 @@ export function QuizPlayer() {
                     </>
                   )}
                 </p>
-                <p className="text-muted-foreground mt-1">
-                  {question.answer.explanation}
-                </p>
+                <p className="text-muted-foreground mt-1">{question.answer.explanation}</p>
               </div>
             )}
           </div>
@@ -511,12 +480,7 @@ export function QuizPlayer() {
 
       {/* ---- Bottom navigation ---- */}
       <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-background/95 backdrop-blur-sm">
-        <Button
-          variant="ghost"
-          size="sm"
-          disabled={localIndex === 0}
-          onClick={goPrev}
-        >
+        <Button variant="ghost" size="sm" disabled={localIndex === 0} onClick={goPrev}>
           <ArrowLeft className="size-4" />
           上一题
         </Button>
@@ -531,12 +495,7 @@ export function QuizPlayer() {
             <ArrowRight className="size-4" />
           </Button>
         ) : (
-          <Button
-            variant="default"
-            size="sm"
-            onClick={handleComplete}
-            disabled={isCompleting}
-          >
+          <Button variant="default" size="sm" onClick={handleComplete} disabled={isCompleting}>
             {isCompleting ? "提交中..." : "完成测验"}
           </Button>
         )}

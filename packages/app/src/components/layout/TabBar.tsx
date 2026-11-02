@@ -1,5 +1,5 @@
-import { evictBlobCache } from "@/components/reader/ReaderView";
 import { DesktopWindowControls } from "@/components/layout/DesktopWindowControls";
+import { evictBlobCache } from "@/components/reader/ReaderView";
 /**
  * TabBar — draggable tab bar
  * macOS: native traffic lights (left), can optionally preview custom controls on the right
@@ -9,7 +9,7 @@ import { type Tab, useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { useReaderStore } from "@/stores/reader-store";
 import { useSyncStore } from "@/stores/sync-store";
-import { BookOpen, FilePenLine, Home, MessageSquare, NotebookPen, X } from "lucide-react";
+import { BookOpen, Brain, FilePenLine, Home, MessageSquare, NotebookPen, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 const TAB_ICONS: Record<string, React.ElementType> = {
@@ -17,6 +17,7 @@ const TAB_ICONS: Record<string, React.ElementType> = {
   reader: BookOpen,
   chat: MessageSquare,
   notes: NotebookPen,
+  quiz: Brain,
   epubDraft: FilePenLine,
 };
 
@@ -55,12 +56,18 @@ function useIsFullscreen() {
         const { getCurrentWindow } = await import("@tauri-apps/api/window");
         const w = getCurrentWindow();
         setFs(await w.isFullscreen());
-        const unlisten = await w.onResized(async () => { setFs(await w.isFullscreen()); });
+        const unlisten = await w.onResized(async () => {
+          setFs(await w.isFullscreen());
+        });
         return unlisten;
-      } catch { return undefined; }
+      } catch {
+        return undefined;
+      }
     };
     let unlisten: (() => void) | undefined;
-    check().then((u) => { unlisten = u; });
+    check().then((u) => {
+      unlisten = u;
+    });
     return () => unlisten?.();
   }, []);
   return fs;
@@ -114,9 +121,7 @@ export function TabBar() {
       </div>
 
       {/* Tabs */}
-      <div
-        className="flex h-full flex-1 items-center gap-0.5 overflow-x-auto px-1"
-      >
+      <div className="flex h-full flex-1 items-center gap-0.5 overflow-x-auto px-1">
         {visibleTabs.map((tab) => (
           <TabItem
             key={tab.id}
@@ -164,7 +169,10 @@ function TabItem({
         type="button"
         className="ml-0.5 hidden h-4 w-4 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:bg-neutral-200/80 hover:text-foreground group-hover:flex"
         data-no-window-drag
-        onClick={(e) => { e.stopPropagation(); onClose(); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          onClose();
+        }}
       >
         <X className="h-3 w-3" />
       </button>

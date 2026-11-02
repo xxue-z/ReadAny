@@ -17,11 +17,12 @@
  */
 import { ChatPage as ChatPageComponent } from "@/components/chat/ChatPage";
 import { CommandPalette } from "@/components/command-palette/CommandPalette";
-import { EpubDraftWorkspace } from "@/components/epub-draft/EpubDraftWorkspace";
 import { DocumentWorkspace } from "@/components/editor/DocumentWorkspace";
+import { EpubDraftWorkspace } from "@/components/epub-draft/EpubDraftWorkspace";
 import { HomePage } from "@/components/home/HomePage";
 import { NotesPage } from "@/components/notes/NotesPage";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
+import { QuizPage } from "@/components/quiz/QuizPage";
 import { ReaderView, evictBlobCache } from "@/components/reader/ReaderView";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { MissingBookPromptDialog } from "@/components/shared/MissingBookPromptDialog";
@@ -46,6 +47,7 @@ const HOME_VIEWS: { id: string; Component: React.ComponentType }[] = [
   { id: "chat", Component: ChatPageComponent },
   { id: "notes", Component: NotesPage },
   { id: "skills", Component: SkillsPage },
+  { id: "quiz", Component: QuizPage },
   { id: "stats", Component: ReadingStatsPanel },
 ];
 

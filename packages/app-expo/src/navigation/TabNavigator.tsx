@@ -1,13 +1,20 @@
-import { BookOpenIcon, MessageSquareIcon, NotebookPenIcon, UserIcon } from "@/components/ui/Icon";
+import {
+  BookOpenIcon,
+  BrainIcon,
+  MessageSquareIcon,
+  NotebookPenIcon,
+  UserIcon,
+} from "@/components/ui/Icon";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import { ChatScreen } from "@/screens/ChatScreen";
 import { LibraryScreen } from "@/screens/LibraryScreen";
 import { NotesScreen } from "@/screens/NotesScreen";
 import { ProfileScreen } from "@/screens/ProfileScreen";
+import QuizScreen from "@/screens/QuizScreen";
 import { useTheme } from "@/styles/ThemeContext";
 /**
- * TabNavigator — bottom tab bar matching the Tauri mobile app's 4 tabs.
- * Icons: BookOpen, MessageSquare, NotebookPen, User (matching BottomTabBar.tsx)
+ * TabNavigator — bottom tab bar matching the Tauri mobile app's 5 tabs.
+ * Icons: BookOpen, MessageSquare, NotebookPen, Brain, User (matching BottomTabBar.tsx)
  */
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { useTranslation } from "react-i18next";
@@ -17,6 +24,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 export type TabParamList = {
   Library: undefined;
   Chat: undefined;
+  Quiz: undefined;
   Notes: { bookId?: string } | undefined;
   Profile: undefined;
 };
@@ -82,6 +90,14 @@ export function TabNavigator() {
         options={{
           tabBarLabel: t("tabs.ai", "AI"),
           tabBarIcon: ({ color, size }) => <MessageSquareIcon color={color} size={size} />,
+        }}
+      />
+      <Tab.Screen
+        name="Quiz"
+        component={QuizScreen}
+        options={{
+          tabBarLabel: t("tabs.quiz", "测验"),
+          tabBarIcon: ({ color, size }) => <BrainIcon color={color} size={size} />,
         }}
       />
       <Tab.Screen

@@ -5,6 +5,8 @@ import { BookChatScreen } from "@/screens/BookChatScreen";
 import { BookDetailsScreen } from "@/screens/BookDetailsScreen";
 import { DocumentEditorScreen } from "@/screens/DocumentEditorScreen";
 import { FullScreenNotesScreen } from "@/screens/FullScreenNotesScreen";
+import QuizPlayerScreen from "@/screens/QuizPlayerScreen";
+import QuizReportScreen from "@/screens/QuizReportScreen";
 import { ReaderScreen } from "@/screens/ReaderScreen";
 import SkillsScreen from "@/screens/SkillsScreen";
 import StatsScreen from "@/screens/StatsScreen";
@@ -48,6 +50,8 @@ export type RootStackParamList = {
   DocumentEditor: { bookId: string; initialPreview?: boolean };
   FullScreenNotes: { bookId: string };
   FontSettings: undefined;
+  QuizPlayer: { sessionId: string };
+  QuizReport: { sessionId: string };
   WebDavImportBrowser: { source: WebDavImportSource };
 };
 
@@ -133,6 +137,16 @@ export function RootNavigator() {
             <Stack.Screen
               name="FullScreenNotes"
               component={FullScreenNotesScreen}
+              options={{ animation: "slide_from_right" }}
+            />
+            <Stack.Screen
+              name="QuizPlayer"
+              component={QuizPlayerScreen}
+              options={{ animation: "slide_from_right" }}
+            />
+            <Stack.Screen
+              name="QuizReport"
+              component={QuizReportScreen}
               options={{ animation: "slide_from_right" }}
             />
           </>
