@@ -22,6 +22,15 @@ export interface Md2EpubOptions {
    * silently losing the image).
    */
   assets?: Record<string, Uint8Array>;
+  /**
+   * Embed the raw Markdown source as `OEBPS/source.md` inside the EPUB.
+   *
+   * This is what lets the document survive a device hop: the generated EPUB is
+   * the only file the sync engine moves, so the editor can recover its source
+   * (and images) from the EPUB instead of showing a destructive placeholder.
+   * Defaults to true.
+   */
+  embedSource?: boolean;
 }
 
 export interface MdBytesConversionResult {
@@ -118,12 +127,6 @@ export function normalizeAssetKey(src: string): string {
     .replace(/^\/+/, "");
 }
 
-function assetFileName(key: string, index: number): string {
-  const base = key.split("/").pop() || `image-${index}`;
-  const safe = base.replace(/[^\w.\-]+/g, "_") || `image-${index}`;
-  return `${index}-${safe}`;
-}
-
 function findAssetBytes(
   assets: Record<string, Uint8Array>,
   src: string,
@@ -149,8 +152,11 @@ function findAssetBytes(
 }
 
 /**
- * Rewrite `<img src>` references to packaged assets under `OEBPS/assets/`.
- * Images without a matching asset are left untouched.
+ * Rewrite `<img src>` references to packaged assets.
+ *
+ * Assets keep their document-relative path inside `OEBPS/` (`assets/a.png` →
+ * `OEBPS/assets/a.png`) so that (a) chapter links and manifest hrefs agree and
+ * (b) unpacking the EPUB yields exactly the files the Markdown source refers to.
  */
 function packageChapterImages(
   html: string,
@@ -167,27 +173,34 @@ function packageChapterImages(
     const src = srcMatch[1];
     const normalized = normalizeAssetKey(src);
     const bytes = findAssetBytes(assets, src, normalized);
-    if (!bytes) return match;
+    if (!bytes || !normalized) return match;
 
     let asset = packaged.get(normalized);
     if (!asset) {
-      const fileName = assetFileName(normalized, packaged.size + 1);
       asset = {
-        zipPath: `OEBPS/assets/${fileName}`,
-        mediaType: mediaTypeForAssetFile(fileName),
+        zipPath: `OEBPS/${normalized}`,
+        mediaType: mediaTypeForAssetFile(normalized),
         data: bytes,
       };
       packaged.set(normalized, asset);
     }
 
-    const newAttrs = attrs.replace(srcMatch[0], `src="${asset.zipPath.replace(/^OEBPS\//, "")}"`);
+    const newAttrs = attrs.replace(srcMatch[0], `src="${normalized}"`);
     return `<img${newAttrs} />`;
   });
 }
 
 // ---------- chapter splitting ----------
 
-/** Split markdown source into chapters on # / ## boundaries. */
+/**
+ * Split markdown source into chapters on `#` / `##` boundaries.
+ *
+ * Headings are detected line-wise *before* rendering, so regions where a `#` is
+ * not a heading must be tracked explicitly: fenced code blocks (```` ``` ```` /
+ * `~~~`), HTML comments and a leading YAML front-matter block. Otherwise a shell
+ * comment such as `# install deps` inside a code fence would split the document
+ * and shred the code block.
+ */
 function splitChapters(markdown: string): MdChapter[] {
   const trimmed = markdown.trim();
   if (!trimmed) {
@@ -200,10 +213,59 @@ function splitChapters(markdown: string): MdChapter[] {
   let currentLines: string[] = [];
   let hasAnyHeading = false;
 
+  // YAML front matter: drop it from the rendered body (still kept in source.md).
+  // Require at least one `key: value` line so a document that merely starts with
+  // a `---` thematic break is not swallowed as metadata.
+  let frontMatterEnd = -1;
+  if (/^---\s*$/.test(lines[0] ?? "")) {
+    const end = lines.findIndex(
+      (line, index) => index > 0 && /^(---|\.\.\.)\s*$/.test(line.trimEnd()),
+    );
+    if (end > 0) {
+      const looksLikeYaml = lines.slice(1, end).some((line) => /^\s*[\w.-]+\s*:(\s|$)/.test(line));
+      if (looksLikeYaml) frontMatterEnd = end;
+    }
+  }
+
+  let fence: { marker: string; length: number } | null = null;
+  let inComment = false;
+
   const renderChapter = (chapterLines: string[]): string =>
     marked.parse(chapterLines.join("\n"), { gfm: true }) as string;
 
-  for (const line of lines) {
+  for (const [index, line] of lines.entries()) {
+    if (index <= frontMatterEnd) continue;
+
+    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+
+    if (fence) {
+      currentLines.push(line);
+      const closes =
+        fenceMatch &&
+        fenceMatch[1]?.[0] === fence.marker &&
+        (fenceMatch[1]?.length ?? 0) >= fence.length;
+      if (closes) fence = null;
+      continue;
+    }
+
+    if (inComment) {
+      currentLines.push(line);
+      if (line.includes("-->")) inComment = false;
+      continue;
+    }
+
+    if (fenceMatch?.[1]) {
+      fence = { marker: fenceMatch[1][0] as string, length: fenceMatch[1].length };
+      currentLines.push(line);
+      continue;
+    }
+
+    if (/^\s{0,3}<!--/.test(line) && !line.includes("-->")) {
+      inComment = true;
+      currentLines.push(line);
+      continue;
+    }
+
     const h1Match = line.match(/^#\s+(.+)/);
     const h2Match = line.match(/^##\s+(.+)/);
 
@@ -329,6 +391,7 @@ function buildContentOpf(
   chapters: MdChapter[],
   lang: string,
   assets: PackagedAsset[],
+  sourceEmbedded: boolean,
 ): string {
   const chapterManifest = chapters
     .map(
@@ -342,8 +405,12 @@ function buildContentOpf(
         `<item id="asset${i + 1}" href="${asset.zipPath}" media-type="${asset.mediaType}"/>`,
     )
     .join("\n      ");
+  const sourceItem = sourceEmbedded
+    ? `<item id="source" href="OEBPS/${SOURCE_ENTRY}" media-type="text/markdown"/>`
+    : "";
   const chapterSpine = chapters.map((_, i) => `<itemref idref="chap${i + 1}"/>`).join("\n      ");
   const assetSection = assetManifest ? `      ${assetManifest}\n` : "";
+  const sourceSection = sourceItem ? `      ${sourceItem}\n` : "";
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id" version="2.0">
@@ -354,7 +421,7 @@ function buildContentOpf(
   </metadata>
   <manifest>
       ${chapterManifest}
-${assetSection}      <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+${assetSection}${sourceSection}      <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
       <item id="css" href="style.css" media-type="text/css"/>
   </manifest>
   <spine toc="ncx">
@@ -364,6 +431,9 @@ ${assetSection}      <item id="ncx" href="toc.ncx" media-type="application/x-dtb
 }
 
 // ---------- main converter ----------
+
+/** Path of the embedded Markdown source inside the EPUB. */
+export const SOURCE_ENTRY = "source.md";
 
 function simpleIdentifier(markdown: string): string {
   return `md-${markdown.length}-${Date.now().toString(36)}`;
@@ -376,6 +446,7 @@ function buildEpubBytes(options: Md2EpubOptions): MdBytesConversionResult {
   const identifier = simpleIdentifier(markdown);
   const chapters = splitChapters(markdown);
   const packagedAssets = new Map<string, PackagedAsset>();
+  const sourceEmbedded = options.embedSource !== false;
 
   // Normalise chapter HTML: valid XHTML, no executable markup, local images
   // copied into the EPUB.
@@ -412,10 +483,21 @@ h2 { text-align: center; margin: 1em 0 0.6em 0; }`;
     entries.push({ name: asset.zipPath, data: asset.data });
   }
 
+  if (sourceEmbedded) {
+    entries.push({ name: `OEBPS/${SOURCE_ENTRY}`, data: encoder.encode(markdown) });
+  }
+
   entries.push({
     name: "content.opf",
     data: encoder.encode(
-      buildContentOpf(bookTitle, identifier, chapters, lang, [...packagedAssets.values()]),
+      buildContentOpf(
+        bookTitle,
+        identifier,
+        chapters,
+        lang,
+        [...packagedAssets.values()],
+        sourceEmbedded,
+      ),
     ),
   });
 

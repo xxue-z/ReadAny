@@ -168,7 +168,11 @@
       "saved": "已保存",
       "saveError": "保存失败",
       "emptyTitle": "无法保存",
-      "emptyBody": "文档内容为空，至少写入一行文字后再保存。"
+      "emptyBody": "文档内容为空，至少写入一行文字后再保存。",
+      "restoredTitle": "已恢复源文件",
+      "restoredBody": "已从本文档的 EPUB 中恢复 Markdown 源文件。",
+      "sourceMissingTitle": "源文件缺失",
+      "sourceMissingBody": "找不到 Markdown 源文件，也无法从 EPUB 中恢复。为避免覆盖原书，文档已切换为只读；请在导入该文档的设备上重新同步。"
     }
   },
   "home": {

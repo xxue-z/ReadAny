@@ -138,7 +138,21 @@
     "horizontalRule": "分割线",
     "saved": "已保存",
     "saveFailed": "保存失败",
-    "emptyNotSaved": "文档内容为空，未保存。"
+    "emptyNotSaved": "文档内容为空，未保存。",
+    "read": "阅读",
+    "save": "保存",
+    "saving": "保存中…",
+    "untitled": "未命名文档",
+    "placeholder": "开始写 Markdown…",
+    "sourceMode": "源码模式",
+    "richMode": "所见即所得",
+    "lossyNotice": "该文档包含 {{features}}，所见即所得编辑会丢失这些内容，已切换为源码模式。",
+    "lossyConfirm": "该文档包含 {{features}}。所见即所得编辑会丢失这些内容，且下次保存会保留丢失后的结果。仍要继续吗？",
+    "fidelityTable": "表格",
+    "fidelityImage": "图片",
+    "fidelityTaskList": "任务列表",
+    "restoredFromEpub": "已从本文档的 EPUB 中恢复 Markdown 源文件",
+    "sourceMissing": "源 Markdown 文件缺失，且无法从 EPUB 中恢复。为避免覆盖原书，此文档已切换为只读；请在导入该文档的设备上重新同步。"
   },
   "ruby": {
     "title": "注音",

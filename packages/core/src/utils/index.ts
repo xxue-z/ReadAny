@@ -18,6 +18,10 @@ export { TxtToEpubConverter } from "./txt-to-epub";
 export type { Txt2EpubOptions, TxtConversionResult, TxtBytesConversionResult } from "./txt-to-epub";
 export { MdToEpubConverter } from "./md-to-epub";
 export type { Md2EpubOptions, MdBytesConversionResult } from "./md-to-epub";
+export { analyzeMarkdownFidelity } from "./markdown-fidelity";
+export type { MarkdownFidelityIssue, MarkdownFidelityReport } from "./markdown-fidelity";
+export { EMBEDDED_MARKDOWN_ENTRY, recoverMarkdownSourceFromEpub } from "./md-source-recovery";
+export type { RecoveredMarkdownAsset, RecoveredMarkdownSource } from "./md-source-recovery";
 export { UmdToEpubConverter } from "./umd-to-epub";
 export type { Umd2EpubOptions, UmdBytesConversionResult } from "./umd-to-epub";
 export { parseUmd } from "./umd-parser";
@@ -67,4 +71,3 @@ export {
 } from "./book-metadata";
 export { getBookProgressPercent, normalizeBookProgress } from "./book-progress";
 export type { BookMetadataFormValues, ExtractedBookMetadata } from "./book-metadata";
-

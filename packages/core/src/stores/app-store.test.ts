@@ -67,4 +67,27 @@ describe("app-store tab initial location", () => {
     });
     expect(useAppStore.getState().activeTabId).toBe("epub-draft-draft-1");
   });
+
+  it("renames a tab and bumps the reload nonce only for the target tab", () => {
+    const { addTab, updateTabTitle, bumpTabReloadNonce } = useAppStore.getState();
+
+    addTab({ id: "document-book-1", type: "document", title: "旧标题", bookId: "book-1" });
+    addTab({ id: "document-book-2", type: "document", title: "另一篇", bookId: "book-2" });
+
+    updateTabTitle("document-book-1", "新标题");
+    bumpTabReloadNonce("document-book-1");
+
+    const tabs = useAppStore.getState().tabs;
+    expect(tabs.find((tab) => tab.id === "document-book-1")).toMatchObject({
+      title: "新标题",
+      reloadNonce: 1,
+    });
+    expect(tabs.find((tab) => tab.id === "document-book-2")?.title).toBe("另一篇");
+    expect(tabs.find((tab) => tab.id === "document-book-2")?.reloadNonce).toBeUndefined();
+
+    bumpTabReloadNonce("document-book-1");
+    expect(
+      useAppStore.getState().tabs.find((tab) => tab.id === "document-book-1")?.reloadNonce,
+    ).toBe(2);
+  });
 });

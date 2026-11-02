@@ -425,7 +425,7 @@ export function AppLayout() {
             className="absolute inset-0 overflow-hidden pt-8"
             style={{ display: activeTabId === tab.id ? "block" : "none" }}
           >
-            <DocumentWorkspace bookId={tab.bookId!} />
+            <DocumentWorkspace bookId={tab.bookId!} tabId={tab.id} />
           </div>
         ))}
       </main>

@@ -61,6 +61,8 @@ export interface AppState {
   reorderTabs: (fromIndex: number, toIndex: number) => void;
   /** Force a reader tab to reload its book file (after the file was rewritten). */
   bumpTabReloadNonce: (tabId: string) => void;
+  /** Keep the tab label in sync with a renamed book/document. */
+  updateTabTitle: (tabId: string, title: string) => void;
   toggleSidebar: () => void;
   setSidebarTab: (tab: SidebarTab) => void;
   setShowSettings: (show: boolean, tab?: SettingsTab) => void;
@@ -129,6 +131,13 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       tabs: state.tabs.map((tab) =>
         tab.id === tabId ? { ...tab, reloadNonce: (tab.reloadNonce ?? 0) + 1 } : tab,
+      ),
+    })),
+
+  updateTabTitle: (tabId, title) =>
+    set((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.id === tabId && tab.title !== title ? { ...tab, title } : tab,
       ),
     })),
 

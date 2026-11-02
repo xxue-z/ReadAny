@@ -15,6 +15,7 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import type { RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getPlatformService } from "@readany/core/services";
+import { recoverMarkdownSourceFromEpub } from "@readany/core/utils/md-source-recovery";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -182,6 +183,25 @@ function getMdPath(bookId: string): Promise<string> {
   })();
 }
 
+function getEpubPath(bookId: string): Promise<string> {
+  return (async () => {
+    const platform = getPlatformService();
+    const appData = await platform.getAppDataDir();
+    return platform.joinPath(appData, `books/${bookId}.epub`);
+  })();
+}
+
+/** Create a directory under the app data dir (no-op when it exists). */
+async function ensureAppDir(relativePath: string): Promise<void> {
+  const platform = getPlatformService();
+  const appData = await platform.getAppDataDir();
+  try {
+    await platform.mkdir(await platform.joinPath(appData, relativePath));
+  } catch {
+    /* already exists */
+  }
+}
+
 // Helper: insert Markdown syntax at cursor position
 function applyMarkdownSyntax(
   text: string,
@@ -226,6 +246,8 @@ export function DocumentEditorScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isPreview, setIsPreview] = useState(route.params.initialPreview ?? false);
   const [isSaving, setIsSaving] = useState(false);
+  /** Source missing and not recoverable: refuse to write (would clobber the book). */
+  const [isReadOnly, setIsReadOnly] = useState(false);
 
   const inputRef = useRef<TextInput>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
@@ -234,45 +256,93 @@ export function DocumentEditorScreen() {
   const lastSavedRef = useRef<string | null>(null);
   /** Latest text, readable from the unmount cleanup without stale closures. */
   const markdownRef = useRef("");
+  /** Read-only guard, readable from the unmount/AppState callbacks. */
+  const readOnlyRef = useRef(false);
 
   const s = useMemo(() => makeStyles(colors, layout.horizontalPadding), [colors, layout]);
+
+  useEffect(() => {
+    readOnlyRef.current = isReadOnly;
+  }, [isReadOnly]);
 
   // Load once per document. `book` is only used for the title fallback, so it
   // must not retrigger the load (that would discard in-progress edits).
   // biome-ignore lint/correctness/useExhaustiveDependencies: load once per bookId
   useEffect(() => {
     let cancelled = false;
+    const platform = getPlatformService();
+
+    const apply = (text: string) => {
+      if (cancelled) return;
+      setMarkdown(text);
+      markdownRef.current = text;
+      lastSavedRef.current = text;
+      setIsLoading(false);
+    };
+
     (async () => {
       try {
         const mdPath = await getMdPath(bookId);
-        const platform = getPlatformService();
         const bytes = await platform.readFile(mdPath);
-        const decoder = new TextDecoder("utf-8");
-        if (!cancelled) {
-          const text = decoder.decode(bytes);
-          setMarkdown(text);
-          markdownRef.current = text;
-          lastSavedRef.current = text;
-          setIsLoading(false);
+        apply(new TextDecoder("utf-8").decode(bytes));
+        return;
+      } catch (err) {
+        // Missing `.md`: try the copy embedded in the (synced) EPUB before
+        // giving up. Inventing placeholder content here would overwrite the
+        // book on the next auto-save.
+        console.warn("[DocumentEditor] Markdown missing, trying EPUB recovery:", err);
+      }
+
+      try {
+        const epubPath = await getEpubPath(bookId);
+        const epubBytes = await platform.readFile(epubPath);
+        const recovered = await recoverMarkdownSourceFromEpub(epubBytes);
+        if (recovered && !cancelled) {
+          const appData = await platform.getAppDataDir();
+          for (const asset of recovered.assets) {
+            const slash = asset.path.lastIndexOf("/");
+            if (slash > 0) await ensureAppDir(`books/${asset.path.slice(0, slash)}`);
+            const dest = await platform.joinPath(appData, `books/${asset.path}`);
+            await platform.writeFile(dest, asset.bytes);
+          }
+          const mdPath = await getMdPath(bookId);
+          await platform.writeFile(mdPath, new TextEncoder().encode(recovered.markdown));
+          apply(recovered.markdown);
+          Alert.alert(
+            t("library.editor.restoredTitle", "Source restored"),
+            t(
+              "library.editor.restoredBody",
+              "The Markdown source was restored from this document's EPUB.",
+            ),
+          );
+          return;
         }
       } catch (err) {
-        console.warn("[DocumentEditor] Failed to load markdown:", err);
-        if (!cancelled) {
-          const fallback = book?.meta.title ? `# ${book.meta.title}` : "# Untitled";
-          setMarkdown(fallback);
-          markdownRef.current = fallback;
-          setIsLoading(false);
-        }
+        console.warn("[DocumentEditor] EPUB source recovery failed:", err);
+      }
+
+      if (!cancelled) {
+        setIsReadOnly(true);
+        setIsLoading(false);
+        Alert.alert(
+          t("library.editor.sourceMissingTitle", "Source missing"),
+          t(
+            "library.editor.sourceMissingBody",
+            "The Markdown source could not be found or recovered. The document is read-only to avoid overwriting it; sync it from the device that imported it.",
+          ),
+        );
       }
     })();
+
     return () => {
       cancelled = true;
     };
-  }, [bookId]);
+  }, [bookId, t]);
 
-  /** Write the document. Empty documents are never persisted. */
+  /** Write the document. Empty (or read-only) documents are never persisted. */
   const persist = useCallback(
     async (value: string, options?: { silent?: boolean }): Promise<boolean> => {
+      if (readOnlyRef.current) return false;
       if (!value.trim()) return false;
       try {
         await saveDocument(bookId, value);
@@ -292,7 +362,7 @@ export function DocumentEditorScreen() {
   // Debounced auto-save driven by the value itself, so the timer always writes
   // the latest text (the previous closure-based debounce dropped the last edit).
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || isReadOnly) return;
     markdownRef.current = markdown;
     if (lastSavedRef.current === markdown) return;
     if (!markdown.trim()) return;
@@ -304,13 +374,13 @@ export function DocumentEditorScreen() {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     };
-  }, [markdown, isLoading, persist]);
+  }, [markdown, isLoading, isReadOnly, persist]);
 
   // Auto-save on app background / inactive
   useEffect(() => {
     const subscription = AppState.addEventListener("change", (nextState) => {
       if (nextState === "background" || nextState === "inactive") {
-        if (isLoading) return; // skip save while still loading
+        if (isLoading || readOnlyRef.current) return; // skip save while loading/read-only
         if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
         void persist(markdownRef.current, { silent: true });
       }
@@ -324,6 +394,7 @@ export function DocumentEditorScreen() {
   useEffect(() => {
     return () => {
       if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+      if (readOnlyRef.current) return;
       const value = markdownRef.current;
       if (value.trim() && lastSavedRef.current !== value) {
         void persist(value, { silent: true });
@@ -333,6 +404,7 @@ export function DocumentEditorScreen() {
 
   const handleSave = useCallback(async () => {
     if (isSaving) return;
+    if (isReadOnly) return;
     if (!markdown.trim()) {
       Alert.alert(
         t("library.editor.emptyTitle", "Cannot save"),
@@ -350,7 +422,7 @@ export function DocumentEditorScreen() {
     } finally {
       setIsSaving(false);
     }
-  }, [isSaving, markdown, persist, t]);
+  }, [isSaving, isReadOnly, markdown, persist, t]);
 
   const handleToolbarAction = useCallback(
     (syntax: { prefix: string; suffix: string; placeholder: string }) => {
@@ -405,9 +477,9 @@ export function DocumentEditorScreen() {
             )}
           </TouchableOpacity>
           <TouchableOpacity
-            style={[s.headerBtn, s.saveBtn]}
+            style={[s.headerBtn, s.saveBtn, isReadOnly && { opacity: 0.4 }]}
             onPress={handleSave}
-            disabled={isSaving}
+            disabled={isSaving || isReadOnly}
           >
             {isSaving ? (
               <ActivityIndicator size="small" color={colors.primaryForeground} />
@@ -418,8 +490,19 @@ export function DocumentEditorScreen() {
         </View>
       </View>
 
+      {isReadOnly ? (
+        <View style={s.readOnlyBanner}>
+          <Text style={s.readOnlyBannerText}>
+            {t(
+              "library.editor.sourceMissingBody",
+              "The Markdown source could not be found or recovered. The document is read-only to avoid overwriting it; sync it from the device that imported it.",
+            )}
+          </Text>
+        </View>
+      ) : null}
+
       {/* Toolbar */}
-      {!isLoading && !isPreview ? (
+      {!isLoading && !isPreview && !isReadOnly ? (
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -485,6 +568,7 @@ export function DocumentEditorScreen() {
             style={s.editor}
             value={markdown}
             onChangeText={setMarkdown}
+            editable={!isReadOnly}
             onSelectionChange={(e) => {
               selectionRef.current = e.nativeEvent.selection;
             }}
@@ -541,6 +625,14 @@ const makeStyles = (colors: ThemeColors, hPad: number) =>
       minHeight: 400,
     },
     loadingContainer: { flex: 1, alignItems: "center", justifyContent: "center" },
+    readOnlyBanner: {
+      paddingHorizontal: hPad,
+      paddingVertical: 10,
+      backgroundColor: withOpacity(colors.amber, 0.12),
+      borderBottomWidth: 0.5,
+      borderBottomColor: withOpacity(colors.amber, 0.35),
+    },
+    readOnlyBannerText: { fontSize: fontSize.xs, lineHeight: 18, color: colors.amber },
     toolbar: {
       maxHeight: 44,
       borderBottomWidth: 0.5,

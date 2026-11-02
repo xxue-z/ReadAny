@@ -333,14 +333,14 @@ describe("MdToEpubConverter", () => {
       expect(result.embeddedImageCount).toBe(1);
 
       const xhtml = entryText(result.epubBytes, "OEBPS/chapter1.xhtml");
-      expect(xhtml).toContain('src="assets/1-cat.png"');
+      expect(xhtml).toContain('src="images/cat.png"');
       expect(xhtml).toMatch(/<img[^>]*\/>/);
 
       const opf = entryText(result.epubBytes, "content.opf");
-      expect(opf).toContain("OEBPS/assets/1-cat.png");
+      expect(opf).toContain("OEBPS/images/cat.png");
       expect(opf).toContain('media-type="image/png"');
 
-      const asset = entryText(result.epubBytes, "OEBPS/assets/1-cat.png");
+      const asset = entryText(result.epubBytes, "OEBPS/images/cat.png");
       expect(asset.length).toBeGreaterThan(0);
     });
 

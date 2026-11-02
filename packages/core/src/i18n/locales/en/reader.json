@@ -138,7 +138,21 @@
     "horizontalRule": "Horizontal Rule",
     "saved": "Document saved",
     "saveFailed": "Failed to save document",
-    "emptyNotSaved": "Document is empty — nothing was saved."
+    "emptyNotSaved": "Document is empty — nothing was saved.",
+    "read": "Read",
+    "save": "Save",
+    "saving": "Saving...",
+    "untitled": "Untitled Document",
+    "placeholder": "Start writing Markdown...",
+    "sourceMode": "Source",
+    "richMode": "Rich text",
+    "lossyNotice": "This document contains {{features}}; rich-text editing would drop them, so the lossless source editor is used.",
+    "lossyConfirm": "This document contains {{features}}. Rich-text editing will drop them and the next save will keep the loss. Continue?",
+    "fidelityTable": "tables",
+    "fidelityImage": "images",
+    "fidelityTaskList": "task lists",
+    "restoredFromEpub": "Markdown source restored from this document’s EPUB",
+    "sourceMissing": "The Markdown source is missing and could not be recovered from the EPUB. This document is read-only to avoid overwriting the book; sync it from the device that imported it."
   },
   "ruby": {
     "title": "Pronunciation",
