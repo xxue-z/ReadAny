@@ -1,6 +1,7 @@
 import { ExportDropdown } from "@/components/notes/ExportDropdown";
 import { Button } from "@/components/ui/button";
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
+import type { BookFormat } from "@/lib/reader/document-loader";
 import { useAnnotationStore } from "@/stores/annotation-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { useNotebookStore } from "@/stores/notebook-store";
@@ -8,21 +9,24 @@ import { type ExportFormat, annotationExporter } from "@readany/core/export";
 import { createSelectionNoteMutation } from "@readany/core/reader";
 import type { Highlight, Note } from "@readany/core/types";
 import { HIGHLIGHT_COLOR_HEX } from "@readany/core/types";
-import { cn } from "@readany/core/utils";
+import { cn, generateId } from "@readany/core/utils";
 import {
   ChevronDown,
   ChevronRight,
   Edit3,
+  FileText,
   Highlighter,
   NotebookPen,
   Save,
+  StickyNote,
   Trash2,
   X,
 } from "lucide-react";
 /**
  * NotebookPanel — left sidebar for viewing and editing notes/highlights
+ * Format-aware: shows highlights + text excerpts for EPUB/PDF, standalone page notes for CBZ.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -33,6 +37,8 @@ interface NotebookPanelProps {
   onGoToCfi?: (cfi: string) => void;
   onAddAnnotation?: (cfi: string, color: string, note?: string) => void;
   onDeleteAnnotation?: (cfi: string) => void;
+  /** Book format — enables format-specific rendering (e.g. CBZ page notes) */
+  bookFormat?: BookFormat;
 }
 
 export function NotebookPanel({
@@ -41,13 +47,29 @@ export function NotebookPanel({
   onGoToCfi,
   onAddAnnotation,
   onDeleteAnnotation,
+  bookFormat,
 }: NotebookPanelProps) {
   const { t } = useTranslation();
 
-  const { pendingNote, editingHighlight, clearPending, saveDraft, getDraft, clearDraft } =
-    useNotebookStore();
+  const {
+    pendingNote,
+    editingHighlight,
+    clearPending,
+    saveDraft,
+    getDraft,
+    clearDraft,
+  } = useNotebookStore();
 
-  const { highlights, addHighlight, updateHighlight, removeHighlight } = useAnnotationStore();
+  const {
+    highlights,
+    notes,
+    addHighlight,
+    updateHighlight,
+    removeHighlight,
+    addNote,
+    updateNote: updateAnnotationNote,
+    removeNote,
+  } = useAnnotationStore();
 
   const books = useLibraryStore((s) => s.books);
 
@@ -56,14 +78,19 @@ export function NotebookPanel({
   const [expandedSections, setExpandedSections] = useState({
     highlights: true,
     notes: true,
+    cbzNotes: true,
   });
 
   // Filter annotations for current book
   const bookHighlights = highlights.filter((h) => h.bookId === bookId);
+  const bookNotes = notes.filter((n) => n.bookId === bookId);
 
   // Highlights with notes vs without
   const highlightsWithNotes = bookHighlights.filter((h) => h.note);
   const highlightsWithoutNotes = bookHighlights.filter((h) => !h.note);
+
+  // Distinguish CBZ standalone notes from highlight-linked notes
+  const isCbz = bookFormat === "CBZ";
 
   // Initialize note content when editing starts
   useEffect(() => {
@@ -85,21 +112,51 @@ export function NotebookPanel({
 
   const handleSave = () => {
     if (pendingNote) {
-      const mutation = createSelectionNoteMutation({
-        bookId,
-        cfi: pendingNote.cfi,
-        text: pendingNote.text,
-        note: noteContent,
-        chapterTitle: pendingNote.chapterTitle,
-        defaultColor: "yellow",
-      });
-      if (mutation.kind === "create") {
-        addHighlight(mutation.highlight);
-        onAddAnnotation?.(pendingNote.cfi, mutation.highlight.color, mutation.highlight.note);
+      if (isCbz) {
+        // CBZ: create standalone Note (no highlight linkage)
+        const existingNote = bookNotes.find(
+          (n) => n.cfi === pendingNote.cfi && !n.highlightId,
+        );
+        if (existingNote) {
+          updateAnnotationNote(existingNote.id, {
+            content: noteContent,
+            title: pendingNote.chapterTitle || existingNote.title,
+            updatedAt: Date.now(),
+          });
+        } else {
+          addNote({
+            id: generateId(),
+            bookId,
+            cfi: pendingNote.cfi,
+            title: pendingNote.chapterTitle || pendingNote.text,
+            content: noteContent,
+            chapterTitle: pendingNote.chapterTitle,
+            tags: [],
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          });
+        }
+        // Clear draft
+        clearDraft(pendingNote.text);
+        clearPending();
+      } else {
+        // EPUB/PDF: highlight + note via createSelectionNoteMutation
+        const mutation = createSelectionNoteMutation({
+          bookId,
+          cfi: pendingNote.cfi,
+          text: pendingNote.text,
+          note: noteContent,
+          chapterTitle: pendingNote.chapterTitle,
+          defaultColor: "yellow",
+        });
+        if (mutation.kind === "create") {
+          addHighlight(mutation.highlight);
+          onAddAnnotation?.(pendingNote.cfi, mutation.highlight.color, mutation.highlight.note);
+        }
+        // Clear draft
+        clearDraft(pendingNote.text);
+        clearPending();
       }
-      // Clear draft
-      clearDraft(pendingNote.text);
-      clearPending();
     } else if (editingHighlight) {
       const mutation = createSelectionNoteMutation({
         bookId,
@@ -143,8 +200,25 @@ export function NotebookPanel({
     }
   };
 
+  const handleCbzNoteClick = (note: Note) => {
+    // Navigate to the CBZ page
+    if (onGoToCfi && note.cfi) {
+      onGoToCfi(note.cfi);
+    }
+  };
+
   const handleEditHighlightNote = (highlight: Highlight) => {
     useNotebookStore.getState().startEditNote(highlight);
+  };
+
+  const handleEditCbzNote = (note: Note) => {
+    useNotebookStore.getState().startNewNote({
+      text: note.title,
+      cfi: note.cfi || "",
+      chapterTitle: note.chapterTitle,
+      existingNote: note.content,
+      highlightId: undefined,
+    });
   };
 
   const handleDeleteNoteOnly = (highlight: Highlight) => {
@@ -152,6 +226,14 @@ export function NotebookPanel({
     onAddAnnotation?.(highlight.cfi, highlight.color, undefined);
     // Clear editing state if we're editing this highlight
     if (editingHighlight?.id === highlight.id) {
+      clearPending();
+      setNoteContent("");
+    }
+  };
+
+  const handleDeleteCbzNote = (note: Note) => {
+    removeNote(note.id);
+    if (editingHighlight?.id === note.id) {
       clearPending();
       setNoteContent("");
     }
@@ -171,19 +253,25 @@ export function NotebookPanel({
     }
   };
 
-  const toggleSection = (section: "highlights" | "notes") => {
+  const toggleSection = (section: "highlights" | "notes" | "cbzNotes") => {
     setExpandedSections((prev) => ({
       ...prev,
       [section]: !prev[section],
     }));
   };
 
+  // Total annotations for export
+  const totalAnnotations = bookHighlights.length + bookNotes.length;
+
   const handleExport = (format: ExportFormat) => {
     const book = books.find((b) => b.id === bookId);
     if (!book) return;
-    const content = annotationExporter.export(bookHighlights as Highlight[], [] as Note[], book, {
-      format,
-    });
+    const content = annotationExporter.export(
+      bookHighlights as Highlight[],
+      bookNotes as Note[],
+      book,
+      { format },
+    );
     if (format === "notion") {
       annotationExporter.copyToClipboard(content);
     } else {
@@ -195,6 +283,7 @@ export function NotebookPanel({
   // Check if we're in editing mode
   const isEditing = pendingNote || editingHighlight;
   const editingText = pendingNote?.text || editingHighlight?.text || "";
+  const isCbzEditing = isEditing && isCbz;
 
   return (
     <div className="flex h-full flex-col">
@@ -202,7 +291,7 @@ export function NotebookPanel({
       <div className="flex h-10 shrink-0 items-center justify-between border-b border-border/40 px-3">
         <span className="text-xs font-medium text-foreground">{t("notebook.title")}</span>
         <div className="flex items-center gap-1">
-          <ExportDropdown onExport={handleExport} disabled={bookHighlights.length === 0} />
+          <ExportDropdown onExport={handleExport} disabled={totalAnnotations === 0} />
           <button
             type="button"
             className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
@@ -218,19 +307,31 @@ export function NotebookPanel({
         {/* Note Editor - shown when creating/editing */}
         {isEditing && (
           <div className="border-b border-border/40 p-3">
-            {/* Selected text preview */}
-            <div className="mb-3 rounded-md bg-muted/50 p-2">
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
-                <Highlighter className="h-3 w-3" />
-                <span>{t("notebook.selectedText")}</span>
+            {/* Selected text preview — skip for CBZ (no text selection) */}
+            {!isCbzEditing && editingText && (
+              <div className="mb-3 rounded-md bg-muted/50 p-2">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                  <Highlighter className="h-3 w-3" />
+                  <span>{t("notebook.selectedText")}</span>
+                </div>
+                <p className="text-sm text-foreground line-clamp-3">"{editingText}"</p>
+                {(pendingNote?.chapterTitle || editingHighlight?.chapterTitle) && (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {pendingNote?.chapterTitle || editingHighlight?.chapterTitle}
+                  </p>
+                )}
               </div>
-              <p className="text-sm text-foreground line-clamp-3">"{editingText}"</p>
-              {(pendingNote?.chapterTitle || editingHighlight?.chapterTitle) && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  {pendingNote?.chapterTitle || editingHighlight?.chapterTitle}
-                </p>
-              )}
-            </div>
+            )}
+
+            {/* CBZ page note header */}
+            {isCbzEditing && pendingNote && (
+              <div className="mb-3 rounded-md bg-muted/50 p-2">
+                <div className="flex items-center gap-1.5 text-xs text-muted-foreground mb-1">
+                  <StickyNote className="h-3 w-3" />
+                  <span>{pendingNote.chapterTitle || pendingNote.text}</span>
+                </div>
+              </div>
+            )}
 
             {/* Note input */}
             <MarkdownEditor
@@ -266,6 +367,40 @@ export function NotebookPanel({
                 </Button>
               </div>
             </div>
+          </div>
+        )}
+
+        {/* CBZ Page Notes section */}
+        {isCbz && bookNotes.length > 0 && (
+          <div className="border-b border-border/40">
+            <button
+              type="button"
+              className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-muted/50"
+              onClick={() => toggleSection("cbzNotes")}
+            >
+              {expandedSections.cbzNotes ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+              <StickyNote className="h-4 w-4 text-muted-foreground" />
+              <span className="text-sm font-medium">{t("notebook.pageNotes")}</span>
+              <span className="text-xs text-muted-foreground">({bookNotes.length})</span>
+            </button>
+            {expandedSections.cbzNotes && (
+              <div className="px-3 pb-2">
+                {bookNotes.map((note) => (
+                  <CbzNoteItem
+                    key={note.id}
+                    note={note}
+                    onClick={() => handleCbzNoteClick(note)}
+                    onEdit={() => handleEditCbzNote(note)}
+                    onDelete={() => handleDeleteCbzNote(note)}
+                    isActive={pendingNote?.cfi === note.cfi}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -339,13 +474,88 @@ export function NotebookPanel({
         )}
 
         {/* Empty state */}
-        {bookHighlights.length === 0 && !isEditing && (
+        {!isEditing && totalAnnotations === 0 && (
           <div className="flex h-full flex-col items-center justify-center p-6 text-center">
             <img src="/note.svg" alt="" className="mb-4 h-32 w-32" />
             <p className="text-sm text-muted-foreground">{t("notebook.empty")}</p>
             <p className="mt-1 text-xs text-muted-foreground/70">{t("notebook.emptyHint")}</p>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// Sub-component: CBZ standalone page note
+interface CbzNoteItemProps {
+  note: Note;
+  onClick: () => void;
+  onEdit: () => void;
+  onDelete: () => void;
+  isActive?: boolean;
+}
+
+function CbzNoteItem({ note, onClick, onEdit, onDelete, isActive }: CbzNoteItemProps) {
+  const { t } = useTranslation();
+
+  // Extract page number from cfi "page-{n}" — 0-based, display 1-based
+  const pageNumber = useMemo(() => {
+    const match = note.cfi?.match(/^page-(\d+)$/);
+    return match ? Number.parseInt(match[1], 10) + 1 : null;
+  }, [note.cfi]);
+
+  // First line of content as preview
+  const contentPreview = useMemo(() => {
+    const firstLine = note.content?.split("\n")[0]?.trim();
+    return firstLine || "";
+  }, [note.content]);
+
+  return (
+    <div
+      className={cn(
+        "group mt-2 rounded-md border border-border/40 p-2 transition-colors cursor-pointer",
+        isActive ? "bg-muted" : "hover:bg-muted/50",
+      )}
+    >
+      <div className="flex items-start gap-2" onClick={onClick}>
+        <FileText className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-foreground">
+            {pageNumber != null ? t("notebook.pageNNote", { n: pageNumber }) : note.title}
+          </p>
+          {contentPreview && (
+            <p className="mt-0.5 text-xs text-muted-foreground line-clamp-2">
+              {contentPreview}
+            </p>
+          )}
+          {note.chapterTitle && (
+            <p className="mt-1 text-xs text-muted-foreground/70">{note.chapterTitle}</p>
+          )}
+        </div>
+      </div>
+      <div className="mt-2 flex justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+          type="button"
+          className="p-1 text-muted-foreground hover:text-primary rounded hover:bg-muted"
+          onClick={(e) => {
+            e.stopPropagation();
+            onEdit();
+          }}
+          title={t("notebook.editNote")}
+        >
+          <Edit3 className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          className="p-1 text-muted-foreground hover:text-destructive rounded hover:bg-muted"
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          title={t("notebook.deleteNote")}
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
       </div>
     </div>
   );

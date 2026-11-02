@@ -115,7 +115,10 @@
     "emptyHint": "选择书中文本进行高亮或添加笔记",
     "editNote": "编辑笔记",
     "addNoteBtn": "添加笔记",
-    "deleteHighlightBtn": "删除高亮"
+    "deleteHighlightBtn": "删除高亮",
+    "addPageNote": "添加页面笔记",
+    "pageNotes": "页面笔记",
+    "pageNNote": "第 {{n}} 页笔记"
   },
   "editor": {
     "enterLink": "输入链接地址",

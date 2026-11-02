@@ -1,6 +1,7 @@
 import { SyncButton } from "@/components/ui/SyncButton";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import type { BookFormat } from "@/lib/reader/document-loader";
 import { toggleWindowFullscreen } from "@/lib/window-fullscreen";
 import { useAnnotationStore } from "@/stores/annotation-store";
 import { useAppStore } from "@/stores/app-store";
@@ -20,6 +21,7 @@ import {
   RotateCcw,
   Search,
   Settings,
+  StickyNote,
   Undo,
   ZoomIn,
   ZoomOut,
@@ -50,6 +52,9 @@ interface ReaderToolbarProps {
   isChatOpen?: boolean;
   isTTSActive?: boolean;
   isFixedLayout?: boolean;
+  /** Book format — enables format-specific toolbar items (e.g. CBZ page notes) */
+  bookFormat?: BookFormat;
+  currentPage?: number;
   fixedLayoutZoom?: number;
   fixedLayoutZoomMin?: number;
   fixedLayoutZoomMax?: number;
@@ -83,6 +88,8 @@ export function ReaderToolbar({
   isChatOpen,
   isTTSActive,
   isFixedLayout = false,
+  bookFormat,
+  currentPage = 0,
   fixedLayoutZoom = 1,
   fixedLayoutZoomMin = 0.5,
   fixedLayoutZoomMax = 3,
@@ -99,7 +106,7 @@ export function ReaderToolbar({
   const tab = useReaderStore((s) => s.tabs[tabId]);
   const canGoBack = useReaderStore((s) => s.canGoBack(tabId));
   const goBack = useReaderStore((s) => s.goBack);
-  const { isOpen: isNotebookOpen, toggleNotebook } = useNotebookStore();
+  const { isOpen: isNotebookOpen, toggleNotebook, startNewNote } = useNotebookStore();
 
   const bookmarks = useAnnotationStore((s) => s.bookmarks);
   const addBookmark = useAnnotationStore((s) => s.addBookmark);
@@ -132,6 +139,19 @@ export function ReaderToolbar({
       });
       toast.success(t("bookmarks.added"));
     }
+  };
+
+  const handleAddCbzPageNote = () => {
+    if (!bookId || bookFormat !== "CBZ") return;
+    // Use 0-based page index for CFI (consistent with foliate-js CBZ fake CFI scheme)
+    const pageIndex = currentPage > 0 ? currentPage - 1 : 0;
+    const cfi = `page-${pageIndex}`;
+    const chapterTitle = `Page ${currentPage}`;
+    startNewNote({
+      text: chapterTitle,
+      cfi,
+      chapterTitle,
+    });
   };
 
   if (!tab) return null;
@@ -209,6 +229,18 @@ export function ReaderToolbar({
         >
           <Bookmark className={`h-3.5 w-3.5 ${isBookmarked ? "fill-current" : ""}`} />
         </Button>
+
+        {bookFormat === "CBZ" && (
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleAddCbzPageNote}
+            title={t("notebook.addPageNote")}
+          >
+            <StickyNote className="h-3.5 w-3.5" />
+          </Button>
+        )}
       </div>
 
       {/* Center: chapter title */}

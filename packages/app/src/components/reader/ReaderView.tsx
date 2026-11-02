@@ -2955,6 +2955,7 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         onResize={notebookPanel.handleResize}
         onResizeStart={notebookPanel.handleResizeStart}
         onResizeEnd={notebookPanel.handleResizeEnd}
+        bookFormat={bookFormat}
       />
 
       {/* Main reading area */}
@@ -3146,6 +3147,8 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
             isChatOpen={showChat}
             isTTSActive={showTTS || ttsPlayState !== "stopped"}
             isFixedLayout={isFixedLayout}
+            bookFormat={bookFormat}
+            currentPage={currentPage}
             fixedLayoutZoom={fixedLayoutZoom}
             fixedLayoutZoomMin={FIXED_LAYOUT_ZOOM_MIN}
             fixedLayoutZoomMax={FIXED_LAYOUT_ZOOM_MAX}
@@ -3290,6 +3293,7 @@ function NotebookSidebarWrapper({
   onResize,
   onResizeStart,
   onResizeEnd,
+  bookFormat,
 }: {
   bookId: string;
   onGoToCfi: (cfi: string) => void;
@@ -3299,6 +3303,7 @@ function NotebookSidebarWrapper({
   onResize: (delta: number, side: "left" | "right") => void;
   onResizeStart: () => void;
   onResizeEnd: () => void;
+  bookFormat?: BookFormat;
 }) {
   const isOpen = useNotebookStore((s) => s.isOpen);
   const closeNotebook = useNotebookStore((s) => s.closeNotebook);
@@ -3322,6 +3327,7 @@ function NotebookSidebarWrapper({
         onGoToCfi={onGoToCfi}
         onAddAnnotation={onAddAnnotation}
         onDeleteAnnotation={onDeleteAnnotation}
+        bookFormat={bookFormat}
       />
     </div>
   );

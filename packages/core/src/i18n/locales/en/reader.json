@@ -115,7 +115,10 @@
     "emptyHint": "Select text in the book to highlight or add notes",
     "editNote": "Edit note",
     "addNoteBtn": "Add note",
-    "deleteHighlightBtn": "Delete highlight"
+    "deleteHighlightBtn": "Delete highlight",
+    "addPageNote": "Add page note",
+    "pageNotes": "Page Notes",
+    "pageNNote": "Page {{n}} Note"
   },
   "editor": {
     "enterLink": "Enter link URL",
