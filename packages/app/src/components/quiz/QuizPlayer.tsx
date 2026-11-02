@@ -16,6 +16,7 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  NotebookPen,
   XCircle,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -520,13 +521,20 @@ export function QuizPlayer() {
               <div
                 className={cn(
                   "mt-2 rounded-lg border p-4 text-sm space-y-1",
-                  isCorrect
-                    ? "border-emerald-200 bg-emerald-50/70 dark:bg-emerald-950/20"
-                    : "border-red-200 bg-red-50/70 dark:bg-red-950/20",
+                  question.type === "short_answer"
+                    ? "border-border bg-muted/40"
+                    : isCorrect
+                      ? "border-emerald-200 bg-emerald-50/70 dark:bg-emerald-950/20"
+                      : "border-red-200 bg-red-50/70 dark:bg-red-950/20",
                 )}
               >
                 <p className="flex items-center gap-1.5 font-semibold">
-                  {isCorrect ? (
+                  {question.type === "short_answer" ? (
+                    <>
+                      <NotebookPen className="size-4 text-muted-foreground" />
+                      {t("quiz.selfGraded", "待自评（对照参考答案）")}
+                    </>
+                  ) : isCorrect ? (
                     <>
                       <CheckCircle className="size-4 text-emerald-500" />
                       {t("quiz.answerCorrect", "Correct")}

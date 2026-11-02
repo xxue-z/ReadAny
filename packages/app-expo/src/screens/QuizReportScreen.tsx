@@ -140,18 +140,24 @@ export default function QuizReportScreen() {
   const renderScoreCard = () => {
     if (!report) return null;
     const { summary } = report;
+    // Nothing to auto-grade (short-answer-only quiz): show "—" instead of 0%.
+    const hasGradable = summary.gradableCount > 0;
     const rate = summary.correctRate;
-    const c = scoreColor(rate);
+    const c = hasGradable ? scoreColor(rate) : colors.mutedForeground;
 
     return (
       <View style={s.scoreCard}>
         <View style={s.scoreRingWrap}>
           <View style={[s.scoreRing, { borderColor: c }]}>
-            <Text style={[s.scoreValue, { color: c }]}>{Math.round(rate * 100)}</Text>
-            <Text style={s.scoreUnit}>%</Text>
+            <Text style={[s.scoreValue, { color: c }]}>
+              {hasGradable ? Math.round(rate * 100) : "—"}
+            </Text>
+            {hasGradable && <Text style={s.scoreUnit}>%</Text>}
           </View>
           <View style={[s.scoreLabelBadge, { backgroundColor: `${c}20` }]}>
-            <Text style={[s.scoreLabelText, { color: c }]}>{scoreLabel(rate, t)}</Text>
+            <Text style={[s.scoreLabelText, { color: c }]}>
+              {hasGradable ? scoreLabel(rate, t) : t("quiz.selfGraded", "待自评")}
+            </Text>
           </View>
         </View>
 
@@ -170,7 +176,9 @@ export default function QuizReportScreen() {
           </View>
           <View style={s.scoreStatItem}>
             <TrophyIcon size={16} color={colors.amber} />
-            <Text style={s.scoreStatValue}>{session?.score ?? 0}</Text>
+            <Text style={s.scoreStatValue}>
+              {session?.score != null ? session.score : t("quiz.notGraded", "—")}
+            </Text>
             <Text style={s.scoreStatLabel}>{t("quiz.score", "Score")}</Text>
           </View>
         </View>
@@ -192,6 +200,12 @@ export default function QuizReportScreen() {
         {summary.pendingCount > 0 && (
           <Text style={[s.sessionMeta, { color: colors.amber }]}>
             {t("quiz.pendingGradingCount", { count: summary.pendingCount })}
+          </Text>
+        )}
+
+        {summary.unansweredCount > 0 && (
+          <Text style={[s.sessionMeta, { color: colors.mutedForeground }]}>
+            {t("quiz.unansweredCount", "Unanswered")}: {summary.unansweredCount}
           </Text>
         )}
 

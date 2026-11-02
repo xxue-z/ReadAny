@@ -4,8 +4,9 @@ import { useQuizStore } from "@readany/core/stores";
  * QuizPage — main quiz entry point with 3 sub-tabs.
  * Shows QuizPlayer when actively taking a quiz, and QuizReport on completion.
  */
-import { Loader2 } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { Button } from "@/components/ui/button";
 import { CustomQuiz } from "./CustomQuiz";
 import { DailyQuiz } from "./DailyQuiz";
 import { QuestionBank } from "./QuestionBank";
@@ -18,6 +19,7 @@ export function QuizPage() {
   const isGenerating = useQuizStore((s) => s.isGenerating);
   const report = useQuizStore((s) => s.report);
   const currentSession = useQuizStore((s) => s.currentSession);
+  const cancelGeneration = useQuizStore((s) => s.cancelGeneration);
 
   // -------------------------------------------------------------------
   // QuizReport — show after completing a quiz
@@ -66,6 +68,10 @@ export function QuizPage() {
         <div className="flex flex-1 flex-col items-center justify-center gap-3 text-muted-foreground">
           <Loader2 className="size-8 animate-spin" />
           <p className="text-sm">{t("quiz.generating")}</p>
+          <Button variant="outline" size="sm" className="mt-2 gap-1.5" onClick={cancelGeneration}>
+            <X className="size-3.5" />
+            {t("quiz.cancelGeneration", "取消生成")}
+          </Button>
         </div>
       </div>
     );

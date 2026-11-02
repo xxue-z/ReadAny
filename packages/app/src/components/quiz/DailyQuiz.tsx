@@ -18,6 +18,17 @@ export function buildDailyTimeRange(now = Date.now()): { start: number; end: num
   return { start: now - RECENT_DAYS * 24 * 60 * 60 * 1000, end: now };
 }
 
+/**
+ * Local calendar day key. Using `toISOString()` here compares UTC days, which
+ * shows yesterday's slot as completed for anyone east of UTC around midnight.
+ */
+function localDateKey(value: Date | number): string {
+  const date = new Date(value);
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${date.getFullYear()}-${month}-${day}`;
+}
+
 export function DailyQuiz() {
   const { t } = useTranslation();
   const sessions = useQuizStore((s) => s.sessions);
@@ -38,11 +49,10 @@ export function DailyQuiz() {
     for (let i = RECENT_DAYS - 1; i >= 0; i--) {
       const d = new Date(now);
       d.setDate(d.getDate() - i);
-      const dateStr = d.toISOString().slice(0, 10);
-      const session = sessions.find((s) => {
-        const sDate = new Date(s.createdAt).toISOString().slice(0, 10);
-        return sDate === dateStr && s.type === "daily" && s.status === "graded";
-      });
+      const dateStr = localDateKey(d);
+      const session = sessions.find(
+        (s) => localDateKey(s.createdAt) === dateStr && s.type === "daily" && s.status === "graded",
+      );
 
       days.push({
         date: d,

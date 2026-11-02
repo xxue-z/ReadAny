@@ -67,7 +67,15 @@ function formatDate(ts: number): string {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function ScoreRing({ rate, accuracyLabel }: { rate: number; accuracyLabel: string }) {
+function ScoreRing({
+  rate,
+  accuracyLabel,
+  placeholder = false,
+}: {
+  rate: number;
+  accuracyLabel: string;
+  placeholder?: boolean;
+}) {
   const pct = Math.round(rate * 100);
   const circumference = 2 * Math.PI * 38;
   const offset = circumference * (1 - rate);
@@ -75,7 +83,7 @@ function ScoreRing({ rate, accuracyLabel }: { rate: number; accuracyLabel: strin
   return (
     <div className="relative size-24 shrink-0">
       <svg className="size-24 -rotate-90" viewBox="0 0 96 96" role="img">
-        <title>{`${accuracyLabel} ${pct}%`}</title>
+        <title>{`${accuracyLabel} ${placeholder ? "—" : `${pct}%`}`}</title>
         <circle cx="48" cy="48" r="38" fill="none" stroke="var(--border)" strokeWidth="6" />
         <circle
           cx="48"
@@ -91,7 +99,7 @@ function ScoreRing({ rate, accuracyLabel }: { rate: number; accuracyLabel: strin
         />
       </svg>
       <span className="absolute inset-0 flex items-center justify-center text-lg font-bold tabular-nums">
-        {pct}%
+        {placeholder ? "—" : `${pct}%`}
       </span>
     </div>
   );
@@ -210,6 +218,7 @@ export function QuizReport() {
   }
 
   const { summary, weakAreas, history, questions } = report;
+  const hasGradableQuestions = summary.gradableCount > 0;
   const score = currentSession?.score ?? Math.round(summary.correctRate * 100);
 
   return (
@@ -219,14 +228,26 @@ export function QuizReport() {
         <div className="rounded-xl border bg-card p-6 shadow-sm">
           <h2 className="text-lg font-bold mb-4">{t("quiz.reportTitle", "Quiz Report")}</h2>
           <div className="flex items-center gap-6">
-            <ScoreRing rate={summary.correctRate} accuracyLabel={t("quiz.accuracy", "Accuracy")} />
+            <ScoreRing
+              rate={hasGradableQuestions ? summary.correctRate : 0}
+              accuracyLabel={t("quiz.accuracy", "Accuracy")}
+              placeholder={!hasGradableQuestions}
+            />
             <div className="space-y-2 flex-1">
               <div className="flex items-center gap-2">
                 <Target className="size-4 text-primary" />
                 <span className="text-sm text-muted-foreground">{t("quiz.score", "Score")}</span>
                 <span className="text-2xl font-bold tabular-nums ml-auto">
-                  {score}
-                  <span className="text-sm font-normal text-muted-foreground">/100</span>
+                  {hasGradableQuestions ? (
+                    <>
+                      {score}
+                      <span className="text-sm font-normal text-muted-foreground">/100</span>
+                    </>
+                  ) : (
+                    <span className="text-lg font-normal text-muted-foreground">
+                      {t("quiz.scoreUnavailable", "—（需自评）")}
+                    </span>
+                  )}
                 </span>
               </div>
               <div className="flex items-center gap-2">
@@ -238,6 +259,17 @@ export function QuizReport() {
                   {summary.correctCount} / {summary.gradableCount}
                 </span>
               </div>
+              {summary.unansweredCount > 0 && (
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="size-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    {t("quiz.unansweredCount", "Unanswered")}
+                  </span>
+                  <span className="tabular-nums ml-auto font-medium">
+                    {summary.unansweredCount}
+                  </span>
+                </div>
+              )}
               {summary.pendingCount > 0 && (
                 <div className="flex items-center gap-2">
                   <AlertCircle className="size-4 text-amber-500" />

@@ -505,6 +505,18 @@ export default function QuizPlayerScreen() {
           </View>
         )}
 
+        {/* Re-open the explanation for a question answered earlier (resume/revisit). */}
+        {hasAnswered && question.type !== "short_answer" && !showExplanation && (
+          <TouchableOpacity
+            style={[s.showAnswerBtn, { borderColor: colors.border, marginTop: 12 }]}
+            onPress={() => setShowExplanation(true)}
+          >
+            <Text style={[s.showAnswerBtnText, { color: colors.mutedForeground }]}>
+              {t("quiz.showExplanation", "查看解析")}
+            </Text>
+          </TouchableOpacity>
+        )}
+
         {/* Explanation (post-answer). Short answers get the reference answer in the
             answer section instead of a right/wrong badge. */}
         {hasAnswered && showExplanation && question.type !== "short_answer" && (

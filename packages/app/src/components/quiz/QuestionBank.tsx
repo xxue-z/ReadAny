@@ -10,6 +10,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useLibraryStore } from "@/stores/library-store";
 import { getQuestionBank } from "@readany/core/db/database";
 import type { QuestionBankEntry, QuestionType } from "@readany/core/types";
 import { BookOpen, Search, Tag } from "lucide-react";
@@ -23,56 +24,71 @@ const TYPE_LABEL_KEYS: Record<QuestionType, string> = {
   short_answer: "quiz.shortAnswer",
 };
 
-const ALL_TAGS = [
-  "vocabulary",
-  "grammar",
-  "comprehension",
-  "inference",
-  "summary",
-  "detail",
-  "theme",
-  "character",
-  "plot",
-  "style",
-];
+/** Accuracy buckets shown in the filter (client-side on the loaded page). */
+type AccuracyFilter = "all" | "never" | "low" | "mid" | "high";
 
 export function QuestionBank() {
   const { t } = useTranslation();
+  const books = useLibraryStore((s) => s.books);
   const [entries, setEntries] = useState<QuestionBankEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [typeFilter, setTypeFilter] = useState<string>("all");
+  const [bookFilter, setBookFilter] = useState<string>("all");
+  const [accuracyFilter, setAccuracyFilter] = useState<AccuracyFilter>("all");
   const [tagFilter, setTagFilter] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
 
+  // Book/type filtering happens in SQL; tag/accuracy/search are applied locally
+  // so the tag list can be derived from what is actually in the bank.
   const loadEntries = useCallback(async () => {
     setLoading(true);
     try {
-      const q: { bookId?: string; tags?: string[]; type?: string } = {};
-      if (typeFilter && typeFilter !== "all") q.type = typeFilter;
-      if (tagFilter && tagFilter !== "all") q.tags = [tagFilter];
-      const result = await getQuestionBank(q);
-      setEntries(result);
+      const query: { bookId?: string; type?: string } = {};
+      if (typeFilter && typeFilter !== "all") query.type = typeFilter;
+      if (bookFilter && bookFilter !== "all") query.bookId = bookFilter;
+      setEntries(await getQuestionBank(query));
     } catch (err) {
       console.error("[QuestionBank] Failed to load entries:", err);
       setEntries([]);
     } finally {
       setLoading(false);
     }
-  }, [typeFilter, tagFilter]);
+  }, [typeFilter, bookFilter]);
 
   useEffect(() => {
     loadEntries();
   }, [loadEntries]);
 
-  // Client-side search filter
+  const tagOptions = useMemo(() => {
+    const tags = new Set<string>();
+    for (const entry of entries) {
+      for (const tag of entry.tags) tags.add(tag);
+    }
+    return [...tags].sort((a, b) => a.localeCompare(b));
+  }, [entries]);
+
   const filteredEntries = useMemo(() => {
-    if (!searchQuery.trim()) return entries;
-    const lower = searchQuery.toLowerCase();
-    return entries.filter(
-      (e) =>
-        e.tags.some((tg) => tg.toLowerCase().includes(lower)) || e.id.toLowerCase().includes(lower),
-    );
-  }, [entries, searchQuery]);
+    const lower = searchQuery.trim().toLowerCase();
+    return entries.filter((entry) => {
+      if (tagFilter !== "all" && !entry.tags.includes(tagFilter)) return false;
+
+      if (accuracyFilter !== "all") {
+        const rate = entry.correctRate;
+        const attempted = entry.usageCount > 0 && rate !== undefined;
+        if (accuracyFilter === "never" && attempted) return false;
+        if (accuracyFilter !== "never") {
+          if (!attempted || rate === undefined) return false;
+          if (accuracyFilter === "low" && rate >= 0.5) return false;
+          if (accuracyFilter === "mid" && (rate < 0.5 || rate >= 0.8)) return false;
+          if (accuracyFilter === "high" && rate < 0.8) return false;
+        }
+      }
+
+      if (!lower) return true;
+      const haystack = [entry.stem ?? "", entry.questionId, ...entry.tags].join(" ").toLowerCase();
+      return haystack.includes(lower);
+    });
+  }, [entries, searchQuery, tagFilter, accuracyFilter]);
 
   return (
     <div className="flex flex-col gap-4 py-2">
@@ -89,6 +105,21 @@ export function QuestionBank() {
           />
         </div>
 
+        {/* Book filter */}
+        <Select value={bookFilter} onValueChange={setBookFilter}>
+          <SelectTrigger className="h-9 w-40">
+            <SelectValue placeholder={t("quiz.filterBook", "Book")} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t("quiz.allBooks")}</SelectItem>
+            {books.map((book) => (
+              <SelectItem key={book.id} value={String(book.id)}>
+                {book.meta.title}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+
         {/* Type filter */}
         <Select value={typeFilter} onValueChange={setTypeFilter}>
           <SelectTrigger className="h-9 w-36">
@@ -103,18 +134,35 @@ export function QuestionBank() {
           </SelectContent>
         </Select>
 
-        {/* Tag filter */}
+        {/* Tag filter (derived from the bank) */}
         <Select value={tagFilter} onValueChange={setTagFilter}>
           <SelectTrigger className="h-9 w-36">
             <SelectValue placeholder={t("quiz.tag")} />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">{t("quiz.allTags")}</SelectItem>
-            {ALL_TAGS.map((tg) => (
-              <SelectItem key={tg} value={tg}>
-                {tg}
+            {tagOptions.map((tag) => (
+              <SelectItem key={tag} value={tag}>
+                {tag}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+
+        {/* Accuracy filter */}
+        <Select
+          value={accuracyFilter}
+          onValueChange={(value) => setAccuracyFilter(value as AccuracyFilter)}
+        >
+          <SelectTrigger className="h-9 w-36">
+            <SelectValue placeholder={t("quiz.accuracyFilter", "Correct rate")} />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">{t("quiz.allAccuracies", "Any accuracy")}</SelectItem>
+            <SelectItem value="never">{t("quiz.accuracyNever", "Never graded")}</SelectItem>
+            <SelectItem value="low">{t("quiz.accuracyLow", "< 50%")}</SelectItem>
+            <SelectItem value="mid">{t("quiz.accuracyMid", "50% – 80%")}</SelectItem>
+            <SelectItem value="high">{t("quiz.accuracyHigh", "≥ 80%")}</SelectItem>
           </SelectContent>
         </Select>
 
@@ -154,14 +202,16 @@ export function QuestionBank() {
               </div>
 
               {/* Tags */}
-              <div className="flex flex-wrap gap-1">
-                {entry.tags.map((tg) => (
-                  <Badge key={tg} variant="secondary" className="text-[10px]">
-                    <Tag className="mr-1 h-3 w-3" />
-                    {tg}
-                  </Badge>
-                ))}
-              </div>
+              {entry.tags.length > 0 && (
+                <div className="flex flex-wrap gap-1">
+                  {entry.tags.map((tag) => (
+                    <Badge key={tag} variant="secondary" className="text-[10px]">
+                      <Tag className="mr-1 h-3 w-3" />
+                      {tag}
+                    </Badge>
+                  ))}
+                </div>
+              )}
 
               {/* Stats row */}
               <div className="flex items-center gap-4 text-xs text-muted-foreground">
@@ -169,7 +219,10 @@ export function QuestionBank() {
                   {t("quiz.usageCount")}: {entry.usageCount}
                 </span>
                 <span>
-                  {t("quiz.correctRate")}: {Math.round(entry.correctRate * 100)}%
+                  {t("quiz.correctRate")}:{" "}
+                  {entry.correctRate === undefined
+                    ? t("quiz.notGraded", "—")
+                    : `${Math.round(entry.correctRate * 100)}%`}
                 </span>
                 {entry.difficulty != null && (
                   <span>

@@ -89,6 +89,7 @@ export default function QuizScreen() {
   const [activeTab, setActiveTab] = useState<SubTab>("daily");
   const [bankEntries, setBankEntries] = useState<QuestionBankEntry[]>([]);
   const [bankLoading, setBankLoading] = useState(false);
+  const [bankTypeFilter, setBankTypeFilter] = useState<"all" | QuestionType>("all");
 
   // -- Custom form state ----------------------------------------------------
   const [customType, setCustomType] = useState<"daily" | "monthly" | "quarterly" | "custom">(
@@ -98,6 +99,8 @@ export default function QuizScreen() {
   const [customDifficulty, setCustomDifficulty] = useState<1 | 2 | 3>(2);
   const [customBankRatio, setCustomBankRatio] = useState(0.5);
   const [customWrongRatio, setCustomWrongRatio] = useState(0.3);
+  /** Reading window (days). 0 = all history. */
+  const [customRangeDays, setCustomRangeDays] = useState(30);
   const [typeDistSingle, setTypeDistSingle] = useState(5);
   const [typeDistMulti, setTypeDistMulti] = useState(3);
   const [typeDistTF, setTypeDistTF] = useState(1);
@@ -202,6 +205,16 @@ export default function QuizScreen() {
         difficulty: customDifficulty,
         bankRatio: customBankRatio,
         wrongRatio: customWrongRatio,
+        // Without a range the generator quizzes the entire reading history, so
+        // daily/monthly/quarterly would all behave the same.
+        ...(customRangeDays > 0
+          ? {
+              timeRange: {
+                start: Date.now() - customRangeDays * 24 * 60 * 60 * 1000,
+                end: Date.now(),
+              },
+            }
+          : {}),
       };
       await useQuizStore.getState().startQuiz(config, aiConfig);
       const sessionId = useQuizStore.getState().currentSession?.id;
@@ -232,6 +245,7 @@ export default function QuizScreen() {
     typeDistMulti,
     typeDistTF,
     typeDistShort,
+    customRangeDays,
   ]);
 
   const resumeSession = useCallback(
@@ -422,6 +436,29 @@ export default function QuizScreen() {
         ))}
       </View>
 
+      {/* Reading window */}
+      <Text style={s.fieldLabel}>{t("quiz.timeRange", "阅读时间范围")}</Text>
+      <View style={s.typeRow}>
+        {(
+          [
+            { days: 7, labelKey: "quiz.range7" },
+            { days: 30, labelKey: "quiz.range30" },
+            { days: 90, labelKey: "quiz.range90" },
+            { days: 0, labelKey: "quiz.rangeAll" },
+          ] as const
+        ).map((option) => (
+          <TouchableOpacity
+            key={option.days}
+            style={[s.typeChip, customRangeDays === option.days && s.typeChipActive]}
+            onPress={() => setCustomRangeDays(option.days)}
+          >
+            <Text style={[s.typeChipText, customRangeDays === option.days && s.typeChipTextActive]}>
+              {t(option.labelKey, option.days === 0 ? "全部" : `${option.days} 天`)}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
       {/* Question count */}
       <Text style={s.fieldLabel}>{t("quiz.questionCount")}</Text>
       <TextInput
@@ -594,17 +631,50 @@ export default function QuizScreen() {
         </View>
       );
     }
+    const visibleEntries =
+      bankTypeFilter === "all"
+        ? bankEntries
+        : bankEntries.filter((entry) => entry.questionType === bankTypeFilter);
     return (
       <FlatList
         style={s.tabContent}
-        data={bankEntries}
+        data={visibleEntries}
         keyExtractor={(item) => item.id}
+        ListHeaderComponent={
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={s.bankFilterRow}
+          >
+            {(
+              [
+                { key: "all", labelKey: "quiz.allTypes" },
+                { key: "single_choice", labelKey: "quiz.singleChoice" },
+                { key: "multi_choice", labelKey: "quiz.multiChoice" },
+                { key: "true_false", labelKey: "quiz.trueFalse" },
+                { key: "short_answer", labelKey: "quiz.shortAnswer" },
+              ] as const
+            ).map((option) => (
+              <TouchableOpacity
+                key={option.key}
+                style={[s.typeChip, bankTypeFilter === option.key && s.typeChipActive]}
+                onPress={() => setBankTypeFilter(option.key)}
+              >
+                <Text
+                  style={[s.typeChipText, bankTypeFilter === option.key && s.typeChipTextActive]}
+                >
+                  {t(option.labelKey)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        }
         renderItem={({ item }) => (
           <View style={s.bankCard}>
             <View style={s.bankHeader}>
               <BookOpenIcon size={14} color={colors.mutedForeground} />
-              <Text style={s.bankId} numberOfLines={1}>
-                {item.questionId}
+              <Text style={s.bankId} numberOfLines={2}>
+                {item.stem || item.questionId}
               </Text>
             </View>
             {item.tags.length > 0 && (
@@ -621,7 +691,10 @@ export default function QuizScreen() {
                 {t("quiz.usageCountValue", { count: item.usageCount })}
               </Text>
               <Text style={s.bankMetaText}>
-                {t("quiz.correctRate")}: {(item.correctRate * 100).toFixed(0)}%
+                {t("quiz.correctRate")}:{" "}
+                {item.correctRate === undefined
+                  ? t("quiz.notGraded", "—")
+                  : `${(item.correctRate * 100).toFixed(0)}%`}
               </Text>
             </View>
           </View>
@@ -904,6 +977,7 @@ const makeStyles = (colors: ThemeColors) =>
 
     // Bank tab
     bankList: { padding: 16 },
+    bankFilterRow: { gap: 8, paddingBottom: 12 },
     bankCard: {
       padding: 14,
       backgroundColor: colors.card,
