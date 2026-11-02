@@ -1205,6 +1205,16 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
           // For MD files: parse + convert to EPUB bytes (Markdown ebook format)
           if (ext === "md") {
+            // Re-check for MD duplicate by hash within this batch
+            const mdDuplicate = duplicateIndex.byHash.get(fileHash ?? "");
+            if (mdDuplicate && mdDuplicate.format === "md") {
+              result.skippedDuplicates.push({
+                name: fileName,
+                existingBook: mdDuplicate,
+              });
+              continue;
+            }
+
             try {
               const sourceBytes = await platform.readFile(filePath);
               const text = new TextDecoder("utf-8").decode(sourceBytes);

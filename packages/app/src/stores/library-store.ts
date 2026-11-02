@@ -1012,19 +1012,29 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
           // For MD files, convert Markdown to EPUB before storing
           if (ext === "md") {
+            // Re-check for MD duplicate by hash within this batch
+            const mdDuplicate = duplicateIndex.byHash.get(fileHash ?? "");
+            if (mdDuplicate && mdDuplicate.format === "md") {
+              result.skippedDuplicates.push({
+                name: fileName,
+                existingBook: mdDuplicate,
+              });
+              continue;
+            }
+
             const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
             const { readFile } = await import("@tauri-apps/plugin-fs");
             const rawBytes = await readFile(filePath);
             const decoder = new TextDecoder();
             const markdown = decoder.decode(rawBytes);
             const converter = new MdToEpubConverter();
-            const result = converter.convertToBytes({ markdown });
-            if (result.bookTitle) title = result.bookTitle;
+            const mdResult = converter.convertToBytes({ markdown });
+            if (mdResult.bookTitle) title = mdResult.bookTitle;
             const { writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
             const { join } = await import("@tauri-apps/api/path");
             await mkdir(await join(await getDesktopLibraryRoot(), "books"), { recursive: true });
             const destEpub = await resolveAppPath(`books/${bookId}.epub`);
-            await writeFile(destEpub, result.epubBytes);
+            await writeFile(destEpub, mdResult.epubBytes);
             // Save source MD for future re-editing
             const mdPath = await resolveAppPath(`books/${bookId}.md`);
             await writeFile(mdPath, rawBytes);
