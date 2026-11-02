@@ -21,6 +21,7 @@ export async function getHighlights(bookId: string): Promise<Highlight[]> {
     chapter_title: string | null;
     created_at: number;
     updated_at: number;
+    quad_points: string | null;
   }>("SELECT * FROM highlights WHERE book_id = ? ORDER BY created_at DESC", [bookId]);
   return sortAnnotationsByPosition(
     rows.map((r) => ({
@@ -31,6 +32,7 @@ export async function getHighlights(bookId: string): Promise<Highlight[]> {
       color: r.color as Highlight["color"],
       note: r.note || undefined,
       chapterTitle: r.chapter_title || undefined,
+      quadPoints: r.quad_points ? JSON.parse(r.quad_points) : undefined,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
     })),
@@ -50,6 +52,7 @@ export async function getAllHighlights(limit = 50): Promise<Highlight[]> {
     chapter_title: string | null;
     created_at: number;
     updated_at: number;
+    quad_points: string | null;
   }>("SELECT * FROM highlights ORDER BY created_at DESC LIMIT ?", [limit]);
   return rows.map((r) => ({
     id: r.id,
@@ -59,6 +62,7 @@ export async function getAllHighlights(limit = 50): Promise<Highlight[]> {
     color: r.color as Highlight["color"],
     note: r.note || undefined,
     chapterTitle: r.chapter_title || undefined,
+    quadPoints: r.quad_points ? JSON.parse(r.quad_points) : undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   }));
@@ -77,12 +81,13 @@ export async function getAllHighlightsWithBooks(limit = 500): Promise<HighlightW
     chapter_title: string | null;
     created_at: number;
     updated_at: number;
+    quad_points: string | null;
     book_title: string;
     book_author: string;
     book_cover_url: string | null;
   }>(
     `SELECT 
-      h.id, h.book_id, h.cfi, h.text, h.color, h.note, h.chapter_title, h.created_at, h.updated_at,
+      h.id, h.book_id, h.cfi, h.text, h.color, h.note, h.chapter_title, h.created_at, h.updated_at, h.quad_points,
       b.title as book_title, b.author as book_author, b.cover_url as book_cover_url
     FROM highlights h
     LEFT JOIN books b ON h.book_id = b.id
@@ -98,6 +103,7 @@ export async function getAllHighlightsWithBooks(limit = 500): Promise<HighlightW
     color: r.color as Highlight["color"],
     note: r.note || undefined,
     chapterTitle: r.chapter_title || undefined,
+    quadPoints: r.quad_points ? JSON.parse(r.quad_points) : undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     bookTitle: r.book_title || "",
@@ -153,8 +159,11 @@ export async function insertHighlight(highlight: Highlight): Promise<void> {
   const database = await getDB();
   const deviceId = await getDeviceId();
   const syncVersion = await nextSyncVersion(database, "highlights");
+  const quadPointsJson = highlight.quadPoints && highlight.quadPoints.length > 0
+    ? JSON.stringify(highlight.quadPoints)
+    : null;
   await database.execute(
-    "INSERT INTO highlights (id, book_id, cfi, text, color, note, chapter_title, created_at, updated_at, sync_version, last_modified_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO highlights (id, book_id, cfi, text, color, note, chapter_title, quad_points, created_at, updated_at, sync_version, last_modified_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     [
       highlight.id,
       highlight.bookId,
@@ -163,6 +172,7 @@ export async function insertHighlight(highlight: Highlight): Promise<void> {
       highlight.color,
       highlight.note || null,
       highlight.chapterTitle || null,
+      quadPointsJson,
       highlight.createdAt,
       highlight.updatedAt,
       syncVersion,

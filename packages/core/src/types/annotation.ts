@@ -21,6 +21,8 @@ export interface Highlight {
   id: string;
   bookId: string;
   cfi: string; // EPUB CFI range
+  /** PDF highlight bounding rect in page coordinate space. Flat array [x1,y1,x2,y2,x3,y3,x4,y4]. null/undefined for EPUB. */
+  quadPoints?: number[];
   text: string;
   color: HighlightColor;
   note?: string;

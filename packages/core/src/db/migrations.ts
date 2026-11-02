@@ -121,6 +121,11 @@ const migrations: Migration[] = [
       "ALTER TABLE threads ADD COLUMN memory_message_count INTEGER DEFAULT 0",
     ],
   },
+  {
+    version: 14,
+    description: "Add quad_points column to highlights for PDF highlight positioning",
+    up: "ALTER TABLE highlights ADD COLUMN quad_points TEXT",
+  },
 ];
 
 /** Run pending migrations */

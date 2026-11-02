@@ -702,6 +702,13 @@ export async function initDatabase(): Promise<void> {
         // Older installs may fail to add the column on the first pass; don't block startup.
       }
 
+      // Migration 14: Add quad_points column for PDF highlight positioning
+      try {
+        await database.execute("ALTER TABLE highlights ADD COLUMN quad_points TEXT");
+      } catch {
+        // Column already exists
+      }
+
       // Migration: Create feedback table
       await database.execute(`
     CREATE TABLE IF NOT EXISTS feedback (
