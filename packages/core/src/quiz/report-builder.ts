@@ -39,7 +39,7 @@ export async function buildQuizReport(sessionId: string): Promise<QuizReport> {
 // Summary
 // ---------------------------------------------------------------------------
 
-function computeSummary(
+export function computeSummary(
   session: { timeSpent: number },
   questions: QuizQuestion[],
 ): QuizSummary {

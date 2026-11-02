@@ -223,7 +223,7 @@ Return ONLY a single valid JSON object with the same structure as above. No addi
  * Try to extract a JSON array or object from LLM output.
  * Handles markdown fences, stray text, and truncated output.
  */
-function extractJson(text: string): string {
+export function extractJson(text: string): string {
   // Strip markdown code fences
   let cleaned = text.trim();
   if (cleaned.startsWith("```")) {
@@ -243,7 +243,7 @@ function extractJson(text: string): string {
   return cleaned.trim();
 }
 
-function tryParseAsQuestions(raw: string): LLMQuestionResponse[] | null {
+export function tryParseAsQuestions(raw: string): LLMQuestionResponse[] | null {
   const json = extractJson(raw);
   if (!json) return null;
 
@@ -368,7 +368,7 @@ function findJsonObjects(text: string): LLMQuestionResponse[] {
   return objects;
 }
 
-function validateAndMapQuestion(
+export function validateAndMapQuestion(
   raw: LLMQuestionResponse,
   sessionId: string,
   defaultDifficulty: number,
