@@ -63,13 +63,15 @@
     "noTags": "還沒有標籤",
     "expandTags": "展開更多 ({{count}})",
     "collapseTags": "收起",
-    "deleteGroupConfirm": "確定刪除此分組？書籍不會被刪除。"
+    "deleteGroupConfirm": "確定刪除此分組？書籍不會被刪除。",
+    "quiz": "測驗"
   },
   "tabs": {
     "library": "書庫",
     "ai": "AI",
     "notes": "筆記",
-    "profile": "我的"
+    "profile": "我的",
+    "quiz": "測驗"
   },
   "window": {
     "minimize": "最小化",

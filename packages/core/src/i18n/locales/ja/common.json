@@ -63,13 +63,15 @@
     "noTags": "タグはまだありません",
     "expandTags": "もっと表示 ({{count}})",
     "collapseTags": "折りたたむ",
-    "deleteGroupConfirm": "このグループを削除しますか？書籍は削除されません。"
+    "deleteGroupConfirm": "このグループを削除しますか？書籍は削除されません。",
+    "quiz": "クイズ"
   },
   "tabs": {
     "library": "ライブラリ",
     "ai": "AI",
     "notes": "ノート",
-    "profile": "マイページ"
+    "profile": "マイページ",
+    "quiz": "クイズ"
   },
   "window": {
     "minimize": "最小化",

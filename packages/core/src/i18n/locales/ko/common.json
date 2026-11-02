@@ -63,13 +63,15 @@
     "noTags": "태그가 없어요",
     "expandTags": "더보기 ({{count}})",
     "collapseTags": "접기",
-    "deleteGroupConfirm": "이 그룹을 삭제하시겠습니까? 책은 삭제되지 않습니다."
+    "deleteGroupConfirm": "이 그룹을 삭제하시겠습니까? 책은 삭제되지 않습니다.",
+    "quiz": "퀴즈"
   },
   "tabs": {
     "library": "서재",
     "ai": "AI",
     "notes": "노트",
-    "profile": "내 정보"
+    "profile": "내 정보",
+    "quiz": "퀴즈"
   },
   "window": {
     "minimize": "최소화",

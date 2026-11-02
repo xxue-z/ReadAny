@@ -70,7 +70,8 @@
     "library": "Library",
     "ai": "AI",
     "notes": "Notes",
-    "profile": "Me"
+    "profile": "Me",
+    "quiz": "Quiz"
   },
   "window": {
     "minimize": "Minimize",

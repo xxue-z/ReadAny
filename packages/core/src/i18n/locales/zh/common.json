@@ -70,7 +70,8 @@
     "library": "书库",
     "ai": "AI",
     "notes": "笔记",
-    "profile": "我的"
+    "profile": "我的",
+    "quiz": "测验"
   },
   "window": {
     "minimize": "最小化",

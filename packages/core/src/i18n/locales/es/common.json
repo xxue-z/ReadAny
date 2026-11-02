@@ -63,13 +63,15 @@
     "noTags": "Aún no hay etiquetas",
     "expandTags": "Mostrar más ({{count}})",
     "collapseTags": "Mostrar menos",
-    "deleteGroupConfirm": "¿Eliminar este grupo? Los libros no se eliminarán."
+    "deleteGroupConfirm": "¿Eliminar este grupo? Los libros no se eliminarán.",
+    "quiz": "Cuestionario"
   },
   "tabs": {
     "library": "Biblioteca",
     "ai": "IA",
     "notes": "Notas",
-    "profile": "Perfil"
+    "profile": "Perfil",
+    "quiz": "Cuestionario"
   },
   "window": {
     "minimize": "Minimizar",
