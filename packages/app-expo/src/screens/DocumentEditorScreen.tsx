@@ -35,120 +35,139 @@ type Nav = NativeStackNavigationProp<RootStackParamList>;
 type DocumentEditorRoute = RouteProp<RootStackParamList, "DocumentEditor">;
 
 // Simple Markdown preview component (lightweight, no external dep needed for basic rendering)
+type PreviewBlock =
+  | { key: string; index: number; kind: "heading"; level: 1 | 2 | 3; text: string }
+  | { key: string; index: number; kind: "bullet" | "quote"; text: string }
+  | { key: string; index: number; kind: "bold" | "paragraph"; text: string }
+  | { key: string; index: number; kind: "spacer" };
+
+/**
+ * Build render blocks with keys derived from the line content (plus an
+ * occurrence suffix), so React keeps the right node when a line is inserted or
+ * removed while editing. Array indexes cannot be used as keys for that reason.
+ */
+function buildPreviewBlocks(content: string): PreviewBlock[] {
+  const occurrences = new Map<string, number>();
+  const nextKey = (line: string) => {
+    const base = line.trim() || "__blank__";
+    const count = occurrences.get(base) ?? 0;
+    occurrences.set(base, count + 1);
+    return `${base}#${count}`;
+  };
+
+  return content.split("\n").map((line, index): PreviewBlock => {
+    const key = nextKey(line);
+    if (line.startsWith("# ")) {
+      return { key, index, kind: "heading", level: 1, text: line.slice(2) };
+    }
+    if (line.startsWith("## ")) {
+      return { key, index, kind: "heading", level: 2, text: line.slice(3) };
+    }
+    if (line.startsWith("### ")) {
+      return { key, index, kind: "heading", level: 3, text: line.slice(4) };
+    }
+    if (line.startsWith("- ")) {
+      return { key, index, kind: "bullet", text: line.slice(2) };
+    }
+    if (line.startsWith("> ")) {
+      return { key, index, kind: "quote", text: line.slice(2) };
+    }
+    if (/^\*\*.*\*\*$/.test(line)) {
+      return { key, index, kind: "bold", text: line.replace(/^\*\*/, "").replace(/\*\*$/, "") };
+    }
+    if (line.trim() === "") {
+      return { key, index, kind: "spacer" };
+    }
+    return { key, index, kind: "paragraph", text: line };
+  });
+}
+
 function MarkdownPreview({ content, colors }: { content: string; colors: ThemeColors }) {
-  const lines = content.split("\n");
+  const blocks = useMemo(() => buildPreviewBlocks(content), [content]);
+
   return (
     <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
-      {lines.map((line, i) => {
-        if (line.startsWith("# ")) {
-          return (
-            <Text
-              key={i}
-              style={{
-                fontSize: 24,
-                fontWeight: "700",
-                color: colors.foreground,
-                marginBottom: 12,
-                marginTop: i > 0 ? 20 : 0,
-              }}
-            >
-              {line.slice(2)}
-            </Text>
-          );
-        }
-        if (line.startsWith("## ")) {
-          return (
-            <Text
-              key={i}
-              style={{
-                fontSize: 20,
-                fontWeight: "600",
-                color: colors.foreground,
-                marginBottom: 10,
-                marginTop: 16,
-              }}
-            >
-              {line.slice(3)}
-            </Text>
-          );
-        }
-        if (line.startsWith("### ")) {
-          return (
-            <Text
-              key={i}
-              style={{
-                fontSize: 17,
-                fontWeight: "600",
-                color: colors.foreground,
-                marginBottom: 8,
-                marginTop: 12,
-              }}
-            >
-              {line.slice(4)}
-            </Text>
-          );
-        }
-        if (line.startsWith("- ")) {
-          return (
-            <View key={i} style={{ flexDirection: "row", paddingLeft: 12, marginBottom: 4 }}>
-              <Text style={{ color: colors.mutedForeground, marginRight: 6 }}>{"\u2022"}</Text>
-              <Text style={{ flex: 1, fontSize: 15, lineHeight: 22, color: colors.foreground }}>
-                {line.slice(2)}
+      {blocks.map((block) => {
+        switch (block.kind) {
+          case "heading": {
+            const style =
+              block.level === 1
+                ? {
+                    fontSize: 24,
+                    fontWeight: "700" as const,
+                    marginBottom: 12,
+                    marginTop: block.index > 0 ? 20 : 0,
+                  }
+                : block.level === 2
+                  ? { fontSize: 20, fontWeight: "600" as const, marginBottom: 10, marginTop: 16 }
+                  : { fontSize: 17, fontWeight: "600" as const, marginBottom: 8, marginTop: 12 };
+            return (
+              <Text key={block.key} style={{ ...style, color: colors.foreground }}>
+                {block.text}
               </Text>
-            </View>
-          );
-        }
-        if (line.startsWith("> ")) {
-          return (
-            <View
-              key={i}
-              style={{
-                borderLeftWidth: 3,
-                borderLeftColor: colors.border,
-                paddingLeft: 10,
-                marginBottom: 6,
-                paddingVertical: 4,
-              }}
-            >
-              <Text style={{ fontSize: 14, fontStyle: "italic", color: colors.mutedForeground }}>
-                {line.slice(2)}
+            );
+          }
+          case "bullet":
+            return (
+              <View
+                key={block.key}
+                style={{ flexDirection: "row", paddingLeft: 12, marginBottom: 4 }}
+              >
+                <Text style={{ color: colors.mutedForeground, marginRight: 6 }}>{"\u2022"}</Text>
+                <Text style={{ flex: 1, fontSize: 15, lineHeight: 22, color: colors.foreground }}>
+                  {block.text}
+                </Text>
+              </View>
+            );
+          case "quote":
+            return (
+              <View
+                key={block.key}
+                style={{
+                  borderLeftWidth: 3,
+                  borderLeftColor: colors.border,
+                  paddingLeft: 10,
+                  marginBottom: 6,
+                  paddingVertical: 4,
+                }}
+              >
+                <Text style={{ fontSize: 14, fontStyle: "italic", color: colors.mutedForeground }}>
+                  {block.text}
+                </Text>
+              </View>
+            );
+          case "bold":
+            return (
+              <Text
+                key={block.key}
+                style={{
+                  fontSize: 15,
+                  fontWeight: "700",
+                  lineHeight: 22,
+                  color: colors.foreground,
+                  marginBottom: 4,
+                }}
+              >
+                {block.text}
               </Text>
-            </View>
-          );
+            );
+          case "spacer":
+            return <View key={block.key} style={{ height: 10 }} />;
+          default:
+            return (
+              <Text
+                key={block.key}
+                style={{
+                  fontSize: 15,
+                  lineHeight: 22,
+                  color: colors.foreground,
+                  marginBottom: 4,
+                }}
+              >
+                {block.text}
+              </Text>
+            );
         }
-        if (/^\*\*.*\*\*$/.test(line)) {
-          const text = line.replace(/^\*\*/, "").replace(/\*\*$/, "");
-          return (
-            <Text
-              key={i}
-              style={{
-                fontSize: 15,
-                fontWeight: "700",
-                lineHeight: 22,
-                color: colors.foreground,
-                marginBottom: 4,
-              }}
-            >
-              {text}
-            </Text>
-          );
-        }
-        if (line.trim() === "") {
-          return <View key={i} style={{ height: 10 }} />;
-        }
-        return (
-          <Text
-            key={i}
-            style={{
-              fontSize: 15,
-              lineHeight: 22,
-              color: colors.foreground,
-              marginBottom: 4,
-            }}
-          >
-            {line}
-          </Text>
-        );
       })}
     </ScrollView>
   );
