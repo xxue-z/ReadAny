@@ -135,7 +135,10 @@
     "bulletList": "Bullet List",
     "orderedList": "Ordered List",
     "blockquote": "Blockquote",
-    "horizontalRule": "Horizontal Rule"
+    "horizontalRule": "Horizontal Rule",
+    "saved": "Document saved",
+    "saveFailed": "Failed to save document",
+    "emptyNotSaved": "Document is empty — nothing was saved."
   },
   "ruby": {
     "title": "Pronunciation",

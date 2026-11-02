@@ -131,7 +131,7 @@ export function MarkdownEditor({
       return;
     }
     editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
-  }, [editor]);
+  }, [editor, t]);
 
   if (!editor) {
     return null;

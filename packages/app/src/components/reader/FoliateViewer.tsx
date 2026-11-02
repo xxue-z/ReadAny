@@ -3436,14 +3436,17 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
       appTheme,
     ]);
 
-    // --- Re-paint PDF highlights after a zoom re-render ---
+    // --- Re-paint PDF highlights after a re-render ---
     // pdf.js replaces the text layer's children on every zoom/resize (and on the
     // initial render), which removes the SVG overlays we painted. Re-paint them
-    // once the new render settles.
+    // once the new render settles. Zoom is covered by the settings dependency;
+    // window/container resizes also trigger foliate's ResizeObserver -> #render,
+    // so watch those too or highlights would disappear until the next page turn.
     useEffect(() => {
       if (!isFixedLayout) return;
-      if (pdfDrawnHighlightsRef.current.size === 0) return;
-      const timer = setTimeout(() => {
+
+      const repaint = () => {
+        if (pdfDrawnHighlightsRef.current.size === 0) return;
         const view = viewRef.current;
         if (!view) return;
         for (const [highlightId, entry] of pdfDrawnHighlightsRef.current) {
@@ -3458,8 +3461,27 @@ drawPdfHighlight: (highlightId: string, pageIndex: number, quads: number[], colo
             drawn: pdfDrawnHighlightsRef.current,
           });
         }
-      }, 350);
-      return () => clearTimeout(timer);
+      };
+
+      const initialTimer = setTimeout(repaint, 350);
+
+      let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+      const scheduleRepaint = () => {
+        if (resizeTimer) clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(repaint, 400);
+      };
+
+      window.addEventListener("resize", scheduleRepaint);
+      const container = containerRef.current;
+      const observer = container ? new ResizeObserver(scheduleRepaint) : null;
+      if (container) observer?.observe(container);
+
+      return () => {
+        clearTimeout(initialTimer);
+        if (resizeTimer) clearTimeout(resizeTimer);
+        window.removeEventListener("resize", scheduleRepaint);
+        observer?.disconnect();
+      };
     }, [viewSettings.fixedLayoutZoom, isFixedLayout]);
 
     // Re-scale the content area when the window resizes (max-inline-size is

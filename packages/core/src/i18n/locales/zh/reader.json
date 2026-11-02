@@ -135,7 +135,10 @@
     "bulletList": "无序列表",
     "orderedList": "有序列表",
     "blockquote": "引用",
-    "horizontalRule": "分割线"
+    "horizontalRule": "分割线",
+    "saved": "已保存",
+    "saveFailed": "保存失败",
+    "emptyNotSaved": "文档内容为空，未保存。"
   },
   "ruby": {
     "title": "注音",

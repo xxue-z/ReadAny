@@ -368,7 +368,8 @@ export async function getQuestionBank(query?: {
   }));
 
   if (query?.tags && query.tags.length > 0) {
-    results = results.filter((entry) => query.tags!.some((tag) => entry.tags.includes(tag)));
+    const tags = query.tags;
+    results = results.filter((entry) => tags.some((tag) => entry.tags.includes(tag)));
   }
 
   return results;

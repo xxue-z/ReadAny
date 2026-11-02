@@ -197,7 +197,9 @@ export function buildTypePlan(config: QuizConfig, total: number): TypePlanEntry[
     .sort((a, b) => b.fraction - a.fraction);
   let cursor = 0;
   while (assigned < total && byRemainder.length > 0) {
-    const target = plan[byRemainder[cursor % byRemainder.length]!.index];
+    const remainder = byRemainder[cursor % byRemainder.length];
+    if (!remainder) break;
+    const target = plan[remainder.index];
     if (target) {
       target.count += 1;
       assigned += 1;

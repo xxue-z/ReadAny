@@ -16,11 +16,11 @@ import { BookOpen, Search, Tag } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-const TYPE_LABELS: Record<QuestionType, string> = {
-  single_choice: "单选题",
-  multi_choice: "多选题",
-  true_false: "判断题",
-  short_answer: "简答题",
+const TYPE_LABEL_KEYS: Record<QuestionType, string> = {
+  single_choice: "quiz.singleChoice",
+  multi_choice: "quiz.multiChoice",
+  true_false: "quiz.trueFalse",
+  short_answer: "quiz.shortAnswer",
 };
 
 const ALL_TAGS = [
@@ -148,7 +148,7 @@ export function QuestionBank() {
                 </p>
                 {entry.questionType && (
                   <Badge variant="secondary" className="shrink-0 text-[10px]">
-                    {TYPE_LABELS[entry.questionType] ?? entry.questionType}
+                    {t(TYPE_LABEL_KEYS[entry.questionType] ?? entry.questionType)}
                   </Badge>
                 )}
               </div>

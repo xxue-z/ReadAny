@@ -305,3 +305,44 @@ describe("completion and reset", () => {
     expect(state.currentSession?.status).toBe("graded");
   });
 });
+
+describe("elapsed time checkpoint", () => {
+  it("persists the elapsed time and never moves the clock backwards", async () => {
+    gen.questions = [makeQuestion({ id: "gen-1" }), makeQuestion({ id: "gen-2" })];
+    await useQuizStore.getState().startQuiz(config, aiConfig);
+    const sessionId = useQuizStore.getState().currentSession?.id ?? "";
+
+    await useQuizStore.getState().saveElapsed(42);
+    expect(useQuizStore.getState().currentSession?.timeSpent).toBe(42);
+    expect(mem.sessions.get(sessionId)?.timeSpent).toBe(42);
+
+    // A stale unmount flush (smaller value) must not rewind the clock.
+    await useQuizStore.getState().saveElapsed(12);
+    expect(useQuizStore.getState().currentSession?.timeSpent).toBe(42);
+    expect(mem.sessions.get(sessionId)?.timeSpent).toBe(42);
+  });
+
+  it("lets a resumed session continue from the checkpoint", async () => {
+    gen.questions = [makeQuestion({ id: "gen-1" })];
+    await useQuizStore.getState().startQuiz(config, aiConfig);
+    const sessionId = useQuizStore.getState().currentSession?.id ?? "";
+    await useQuizStore.getState().saveElapsed(75);
+
+    useQuizStore.getState().resetQuiz();
+    await useQuizStore.getState().loadSession(sessionId);
+
+    expect(useQuizStore.getState().currentSession?.timeSpent).toBe(75);
+  });
+
+  it("ignores checkpoints for a finished session", async () => {
+    gen.questions = [makeQuestion({ id: "gen-1" })];
+    await useQuizStore.getState().startQuiz(config, aiConfig);
+    const sessionId = useQuizStore.getState().currentSession?.id ?? "";
+    useQuizStore.getState().submitAnswer("gen-1", "A");
+    await useQuizStore.getState().completeQuiz(30);
+
+    await useQuizStore.getState().saveElapsed(999);
+    expect(useQuizStore.getState().currentSession?.timeSpent).toBe(30);
+    expect(mem.sessions.get(sessionId)?.timeSpent).toBe(30);
+  });
+});

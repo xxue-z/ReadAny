@@ -77,7 +77,9 @@ export function DailyQuiz() {
     try {
       const { aiConfig } = useSettingsStore.getState();
       if (!hasUsableAIConfig(aiConfig)) {
-        toast.error(t("quiz.errorNoAIConfig", "请先在设置中配置 AI 端点与模型。"));
+        toast.error(
+          t("quiz.errorNoAIConfig", "Configure an AI endpoint and model in Settings first."),
+        );
         return;
       }
       // The quiz generator needs the real AIConfig — without it it returns zero
@@ -128,7 +130,7 @@ export function DailyQuiz() {
               {todaySession
                 ? todaySession.status === "graded"
                   ? `${t("quiz.dailyCompleted")} · ${todaySession.score ?? 0}%`
-                  : t("quiz.dailyInProgress", "今日测验进行中，可继续作答。")
+                  : t("quiz.dailyInProgress", "Today's quiz is in progress — resume it.")
                 : t("quiz.dailyNotStarted")}
             </p>
           </div>
@@ -139,7 +141,7 @@ export function DailyQuiz() {
               onClick={() => void handleResume(todaySession.id)}
             >
               <Trophy className="h-4 w-4" />
-              {t("quiz.viewTodayReport", "查看今日报告")}
+              {t("quiz.viewTodayReport", "View today's report")}
             </Button>
           ) : todaySession?.status === "in_progress" ? (
             <Button
@@ -148,7 +150,7 @@ export function DailyQuiz() {
               disabled={isGenerating}
             >
               <RotateCcw className="h-4 w-4" />
-              {t("quiz.resume", "继续测验")}
+              {t("quiz.resume", "Resume")}
             </Button>
           ) : (
             <Button onClick={handleStartQuiz} disabled={isGenerating} className="shrink-0 gap-2">
@@ -201,7 +203,7 @@ export function DailyQuiz() {
       {recentSessions.length > 0 && (
         <div>
           <h3 className="mb-3 text-sm font-medium text-foreground">
-            {t("quiz.recentSessions", "最近测验")}
+            {t("quiz.recentSessions", "Recent Quizzes")}
           </h3>
           <div className="flex flex-col gap-2">
             {recentSessions.map((session) => {
@@ -224,7 +226,7 @@ export function DailyQuiz() {
                     </span>
                   ) : (
                     <span className="text-xs text-amber-600 dark:text-amber-400">
-                      {t("quiz.dailyInProgressShort", "进行中")}
+                      {t("quiz.dailyInProgressShort", "In progress")}
                     </span>
                   )}
                   <Button
@@ -233,7 +235,7 @@ export function DailyQuiz() {
                     className="ml-auto"
                     onClick={() => void handleResume(session.id)}
                   >
-                    {graded ? t("quiz.viewReport", "查看报告") : t("quiz.resume", "继续测验")}
+                    {graded ? t("quiz.viewReport", "View report") : t("quiz.resume", "Resume")}
                   </Button>
                 </div>
               );

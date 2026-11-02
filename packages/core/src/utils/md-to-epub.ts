@@ -200,18 +200,22 @@ function splitChapters(markdown: string): MdChapter[] {
   let currentLines: string[] = [];
   let hasAnyHeading = false;
 
+  const renderChapter = (chapterLines: string[]): string =>
+    marked.parse(chapterLines.join("\n"), { gfm: true }) as string;
+
   for (const line of lines) {
     const h1Match = line.match(/^#\s+(.+)/);
     const h2Match = line.match(/^##\s+(.+)/);
 
     if (h1Match || h2Match) {
       hasAnyHeading = true;
-      // Save previous chapter
+      // Save previous chapter. Heading-only stubs (e.g. "# Title" directly
+      // followed by "## Part") are dropped: they would render as an empty page.
       if (currentLines.length > 0 || currentTitle) {
-        chapters.push({
-          title: currentTitle || "Untitled",
-          html: marked.parse(currentLines.join("\n"), { gfm: true }) as string,
-        });
+        const html = renderChapter(currentLines);
+        if (html.trim()) {
+          chapters.push({ title: currentTitle || "Untitled", html });
+        }
       }
       currentTitle = (h1Match?.[1] ?? h2Match?.[1] ?? "").trim();
       currentLines = [];
@@ -223,10 +227,11 @@ function splitChapters(markdown: string): MdChapter[] {
   // Last chapter
   const lastHtml = currentLines.join("\n").trim();
   if (lastHtml || currentTitle) {
-    chapters.push({
-      title: currentTitle || "Untitled",
-      html: marked.parse(lastHtml, { gfm: true }) as string,
-    });
+    const html = renderChapter(currentLines);
+    // Keep a title-only document as a single (empty) chapter.
+    if (html.trim() || chapters.length === 0) {
+      chapters.push({ title: currentTitle || "Untitled", html });
+    }
   }
 
   // No headings at all: treat as single chapter
@@ -269,46 +274,53 @@ function deriveBookTitle(markdown: string, explicit?: string): string {
 
 function buildChapterXhtml(chapter: MdChapter, lang: string): string {
   const title = escapeXml(chapter.title);
+  const language = escapeXml(lang);
   // Chapter html is already rendered by marked; wrap with XHTML doc
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">\n` +
-    `<html xmlns="http://www.w3.org/1999/xhtml" lang="${escapeXml(lang)}" xml:lang="${escapeXml(lang)}">\n` +
-    `<head>\n  <title>${title}</title>\n  <link rel="stylesheet" type="text/css" href="../style.css"/>\n</head>\n` +
-    `<body><h2>${title}</h2>\n${chapter.html}\n</body>\n` +
-    `</html>`
-  );
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="${language}" xml:lang="${language}">
+<head>
+  <title>${title}</title>
+  <link rel="stylesheet" type="text/css" href="../style.css"/>
+</head>
+<body><h2>${title}</h2>
+${chapter.html}
+</body>
+</html>`;
 }
 
 function buildContainerXml(): string {
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">\n` +
-    `  <rootfiles>\n    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>\n  </rootfiles>\n` +
-    `</container>`
-  );
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container" version="1.0">
+  <rootfiles>
+    <rootfile full-path="content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>`;
 }
 
 function buildTocNcx(bookTitle: string, chapters: MdChapter[], _lang: string): string {
   const navPoints = chapters
     .map((c, i) => {
       const id = `chapter${i + 1}`;
-      return (
-        `<navPoint id="navPoint-${id}" playOrder="${i + 1}">\n` +
-        `  <navLabel><text>${escapeXml(c.title)}</text></navLabel>\n` +
-        `  <content src="./OEBPS/${id}.xhtml"/>\n` +
-        `</navPoint>`
-      );
+      return `<navPoint id="navPoint-${id}" playOrder="${i + 1}">
+  <navLabel><text>${escapeXml(c.title)}</text></navLabel>
+  <content src="./OEBPS/${id}.xhtml"/>
+</navPoint>`;
     })
     .join("\n");
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">\n` +
-    `<head>\n  <meta name="dtb:uid" content="book-id"/>\n  <meta name="dtb:depth" content="1"/>\n  <meta name="dtb:totalPageCount" content="0"/>\n  <meta name="dtb:maxPageNumber" content="0"/>\n</head>\n` +
-    `<docTitle><text>${escapeXml(bookTitle)}</text></docTitle>\n` +
-    `<navMap>\n${navPoints}\n</navMap>\n` +
-    `</ncx>`
-  );
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1">
+<head>
+  <meta name="dtb:uid" content="book-id"/>
+  <meta name="dtb:depth" content="1"/>
+  <meta name="dtb:totalPageCount" content="0"/>
+  <meta name="dtb:maxPageNumber" content="0"/>
+</head>
+<docTitle><text>${escapeXml(bookTitle)}</text></docTitle>
+<navMap>
+${navPoints}
+</navMap>
+</ncx>`;
 }
 
 function buildContentOpf(
@@ -331,19 +343,24 @@ function buildContentOpf(
     )
     .join("\n      ");
   const chapterSpine = chapters.map((_, i) => `<itemref idref="chap${i + 1}"/>`).join("\n      ");
+  const assetSection = assetManifest ? `      ${assetManifest}\n` : "";
 
-  return (
-    `<?xml version="1.0" encoding="UTF-8"?>\n` +
-    `<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id" version="2.0">\n` +
-    `  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">\n` +
-    `    <dc:title>${escapeXml(bookTitle)}</dc:title>\n` +
-    `    <dc:language>${escapeXml(lang)}</dc:language>\n` +
-    `    <dc:identifier id="book-id">${escapeXml(identifier)}</dc:identifier>\n` +
-    `  </metadata>\n` +
-    `  <manifest>\n      ${chapterManifest}\n${assetManifest ? `      ${assetManifest}\n` : ""}      <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>\n      <item id="css" href="style.css" media-type="text/css"/>\n  </manifest>\n` +
-    `  <spine toc="ncx">\n      ${chapterSpine}\n  </spine>\n` +
-    `</package>`
-  );
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" unique-identifier="book-id" version="2.0">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:title>${escapeXml(bookTitle)}</dc:title>
+    <dc:language>${escapeXml(lang)}</dc:language>
+    <dc:identifier id="book-id">${escapeXml(identifier)}</dc:identifier>
+  </metadata>
+  <manifest>
+      ${chapterManifest}
+${assetSection}      <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
+      <item id="css" href="style.css" media-type="text/css"/>
+  </manifest>
+  <spine toc="ncx">
+      ${chapterSpine}
+  </spine>
+</package>`;
 }
 
 // ---------- main converter ----------
@@ -377,18 +394,17 @@ function buildEpubBytes(options: Md2EpubOptions): MdBytesConversionResult {
   entries.push({ name: "mimetype", data: encoder.encode("application/epub+zip") });
   entries.push({ name: "META-INF/container.xml", data: encoder.encode(buildContainerXml()) });
 
-  const css =
-    `body { line-height: 1.6; font-size: 1em; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; text-align: justify; }\n` +
-    `p { text-indent: 2em; margin: 0 0 0.4em 0; }\n` +
-    `h2 { text-align: center; margin: 1em 0 0.6em 0; }`;
+  const css = `body { line-height: 1.6; font-size: 1em; font-family: 'PingFang SC', 'Microsoft YaHei', sans-serif; text-align: justify; }
+p { text-indent: 2em; margin: 0 0 0.4em 0; }
+h2 { text-align: center; margin: 1em 0 0.6em 0; }`;
   entries.push({ name: "style.css", data: encoder.encode(css) });
 
   entries.push({ name: "toc.ncx", data: encoder.encode(buildTocNcx(bookTitle, chapters, lang)) });
 
-  for (let i = 0; i < chapters.length; i++) {
+  for (const [index, chapter] of chapters.entries()) {
     entries.push({
-      name: `OEBPS/chapter${i + 1}.xhtml`,
-      data: encoder.encode(buildChapterXhtml(chapters[i]!, lang)),
+      name: `OEBPS/chapter${index + 1}.xhtml`,
+      data: encoder.encode(buildChapterXhtml(chapter, lang)),
     });
   }
 

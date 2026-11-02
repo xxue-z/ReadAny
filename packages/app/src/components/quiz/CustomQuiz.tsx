@@ -64,7 +64,9 @@ export function CustomQuiz() {
     try {
       const { aiConfig } = useSettingsStore.getState();
       if (!hasUsableAIConfig(aiConfig)) {
-        toast.error(t("quiz.errorNoAIConfig", "请先在设置中配置 AI 端点与模型。"));
+        toast.error(
+          t("quiz.errorNoAIConfig", "Configure an AI endpoint and model in Settings first."),
+        );
         return;
       }
 
@@ -133,17 +135,17 @@ export function CustomQuiz() {
       {/* Reading window */}
       <div className="flex flex-col gap-1.5">
         <span className="text-xs font-medium text-muted-foreground">
-          {t("quiz.timeRange", "阅读时间范围")}
+          {t("quiz.timeRange", "Reading window")}
         </span>
         <Select value={String(rangeDays)} onValueChange={(v) => setRangeDays(Number(v))}>
           <SelectTrigger className="w-full">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="7">{t("quiz.range7", "最近 7 天")}</SelectItem>
-            <SelectItem value="30">{t("quiz.range30", "最近 30 天")}</SelectItem>
-            <SelectItem value="90">{t("quiz.range90", "最近 90 天")}</SelectItem>
-            <SelectItem value="0">{t("quiz.rangeAll", "全部阅读记录")}</SelectItem>
+            <SelectItem value="7">{t("quiz.range7", "Last 7 days")}</SelectItem>
+            <SelectItem value="30">{t("quiz.range30", "Last 30 days")}</SelectItem>
+            <SelectItem value="90">{t("quiz.range90", "Last 90 days")}</SelectItem>
+            <SelectItem value="0">{t("quiz.rangeAll", "All reading history")}</SelectItem>
           </SelectContent>
         </Select>
       </div>

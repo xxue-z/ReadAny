@@ -75,6 +75,12 @@ export interface QuizState {
   /** Return from the report (or an empty quiz) back to the setup screen. */
   resetQuiz: () => void;
 
+  /**
+   * Checkpoint the answering time (seconds) of the current session so that a
+   * resumed quiz continues the clock instead of restarting at 0.
+   */
+  saveElapsed: (seconds: number) => Promise<void>;
+
   /** Load all quiz sessions from DB into `sessions`. */
   loadSessions: () => Promise<void>;
 
@@ -241,17 +247,8 @@ export const useQuizStore = create<QuizState>((set, get) => ({
         ? Math.max(0, Math.round(timeSpentSeconds))
         : currentSession.timeSpent;
 
-    // Persist any short_answer questions that were never submitted with
-    // isCorrect = null (the grader will handle them manually or skip).
-    for (const q of currentQuestions) {
-      if (q.type === "short_answer" && q.isCorrect === undefined) {
-        await updateQuizQuestion(q.id, { isCorrect: undefined as unknown as boolean }).catch(() => {
-          // Non-critical: report builder tolerates missing isCorrect.
-        });
-      }
-    }
-
-    // Build the report (loads fresh data from DB).
+    // Build the report (loads fresh data from DB). Unanswered short answers keep
+    // isCorrect undefined, which the report treats as "pending", not wrong.
     const report = await buildQuizReport(currentSession.id);
 
     // Score is a 0–100 integer derived from the correct-rate fraction.
@@ -302,6 +299,25 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       isGenerating: false,
       isTaking: false,
       report: null,
+    });
+  },
+
+  // -------------------------------------------------------------------------
+  // saveElapsed — checkpoint the answering time so resuming continues the clock
+  // -------------------------------------------------------------------------
+
+  saveElapsed: async (seconds) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    if (currentSession.status === "graded" || currentSession.status === "completed") return;
+
+    const normalized = Math.max(0, Math.round(seconds));
+    // Never move the clock backwards (e.g. a stale unmount flush).
+    if (normalized <= (currentSession.timeSpent ?? 0)) return;
+
+    set({ currentSession: { ...currentSession, timeSpent: normalized } });
+    await updateQuizSession(currentSession.id, { timeSpent: normalized }).catch((err) => {
+      console.warn("[QuizStore] Failed to persist elapsed time:", err);
     });
   },
 

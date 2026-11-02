@@ -68,6 +68,7 @@ export default function QuizPlayerScreen() {
     submitAnswer,
     completeQuiz,
     loadSession,
+    saveElapsed,
   } = useQuizStore();
 
   // Local timer
@@ -86,6 +87,8 @@ export default function QuizPlayerScreen() {
   useEffect(() => {
     setLoading(true);
     loadSession(sessionId)
+      // Resume the clock from the time already spent on this session.
+      .then(() => setElapsed(useQuizStore.getState().currentSession?.timeSpent ?? 0))
       .catch((err) => {
         console.error("[QuizPlayer] loadSession:", err);
         Alert.alert("错误", "加载测验失败");
@@ -104,6 +107,23 @@ export default function QuizPlayerScreen() {
       if (timerRef.current) clearInterval(timerRef.current);
     };
   }, [isTaking]);
+
+  // Checkpoint the elapsed time so a resumed quiz continues the clock instead
+  // of restarting at 0.
+  const elapsedRef = useRef(elapsed);
+  useEffect(() => {
+    elapsedRef.current = elapsed;
+  }, [elapsed]);
+  useEffect(() => {
+    if (!isTaking) return;
+    const id = setInterval(() => {
+      void saveElapsed(elapsedRef.current);
+    }, 15000);
+    return () => {
+      clearInterval(id);
+      void saveElapsed(elapsedRef.current);
+    };
+  }, [isTaking, saveElapsed]);
 
   // Reset local answer UI when the question changes.
   // NOTE: this used to run on every render (no dependency array), which

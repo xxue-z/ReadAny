@@ -67,25 +67,35 @@ export function DocumentWorkspace({ bookId }: DocumentWorkspaceProps) {
     };
   }, [bookId]);
 
-  const handleSave = useCallback(async () => {
-    if (!markdown.trim()) return;
-    setIsSaving(true);
-    try {
-      await saveDocument(bookId, markdown);
-      toast.success(t("editor.saved", "Document saved"));
-    } catch (err) {
-      console.error("[DocumentWorkspace] Save failed:", err);
-      toast.error(t("editor.saveFailed", "Failed to save document"));
-    } finally {
-      setIsSaving(false);
-    }
-  }, [markdown, bookId, saveDocument, t]);
+  const handleSave = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!markdown.trim()) {
+        // Explicit saves must say why nothing happened; autosave stays quiet so
+        // clearing the editor temporarily does not spam toasts.
+        if (!options?.silent) {
+          toast.error(t("editor.emptyNotSaved", "Document is empty — nothing was saved."));
+        }
+        return;
+      }
+      setIsSaving(true);
+      try {
+        await saveDocument(bookId, markdown);
+        toast.success(t("editor.saved", "Document saved"));
+      } catch (err) {
+        console.error("[DocumentWorkspace] Save failed:", err);
+        toast.error(t("editor.saveFailed", "Failed to save document"));
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [markdown, bookId, saveDocument, t],
+  );
 
   // Auto-save with debounce
   const debouncedSave = useCallback(() => {
     if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
     saveTimerRef.current = setTimeout(() => {
-      handleSave();
+      void handleSave({ silent: true });
     }, 3000);
   }, [handleSave]);
 
@@ -144,7 +154,9 @@ export function DocumentWorkspace({ bookId }: DocumentWorkspaceProps) {
           </button>
           <button
             type="button"
-            onClick={handleSave}
+            onClick={() => {
+              void handleSave();
+            }}
             disabled={isSaving}
             className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
           >

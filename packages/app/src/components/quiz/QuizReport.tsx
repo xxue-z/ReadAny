@@ -5,6 +5,7 @@ import { useSettingsStore } from "@/stores/settings-store";
 import { useQuizStore } from "@readany/core/stores";
 import type { HistoryTrend as HistoryTrendType, QuestionType } from "@readany/core/types";
 import { cn } from "@readany/core/utils";
+import type { TFunction } from "i18next";
 /**
  * QuizReport — post-quiz statistics and question review.
  * Displays summary card, per-type breakdown, weak areas, history trend,
@@ -29,18 +30,28 @@ import { getQuizErrorMessage, hasUsableAIConfig } from "./quiz-error";
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TYPE_LABELS: Record<QuestionType, string> = {
-  single_choice: "单选题",
-  multi_choice: "多选题",
-  true_false: "判断题",
-  short_answer: "简答题",
+const TYPE_LABEL_KEYS: Record<QuestionType, string> = {
+  single_choice: "quiz.singleChoice",
+  multi_choice: "quiz.multiChoice",
+  true_false: "quiz.trueFalse",
+  short_answer: "quiz.shortAnswer",
 };
 
-function formatTimeSpent(seconds: number): string {
-  if (seconds < 60) return `${seconds}秒`;
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return s > 0 ? `${m}分${s}秒` : `${m}分钟`;
+/** Short answers are hand-graded, so they have no automatic accuracy. */
+function isGradableType(type: string): boolean {
+  return type !== "short_answer";
+}
+
+function formatTimeSpent(seconds: number, t: TFunction): string {
+  const total = Math.max(0, Math.round(seconds));
+  if (total < 60) {
+    return t("quiz.durationSeconds", { count: total, defaultValue: `${total}s` });
+  }
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return s > 0
+    ? t("quiz.durationMinutes", { minutes: m, seconds: s, defaultValue: `${m}m ${s}s` })
+    : t("quiz.durationMinutesOnly", { count: m, defaultValue: `${m}m` });
 }
 
 function formatRate(rate: number): string {
@@ -56,7 +67,7 @@ function formatDate(ts: number): string {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-function ScoreRing({ rate }: { rate: number }) {
+function ScoreRing({ rate, accuracyLabel }: { rate: number; accuracyLabel: string }) {
   const pct = Math.round(rate * 100);
   const circumference = 2 * Math.PI * 38;
   const offset = circumference * (1 - rate);
@@ -64,7 +75,7 @@ function ScoreRing({ rate }: { rate: number }) {
   return (
     <div className="relative size-24 shrink-0">
       <svg className="size-24 -rotate-90" viewBox="0 0 96 96" role="img">
-        <title>{`正确率 ${pct}%`}</title>
+        <title>{`${accuracyLabel} ${pct}%`}</title>
         <circle cx="48" cy="48" r="38" fill="none" stroke="var(--border)" strokeWidth="6" />
         <circle
           cx="48"
@@ -90,11 +101,17 @@ function ScoreRing({ rate }: { rate: number }) {
 // HistoryTrendBar — lightweight bars for history entries
 // ---------------------------------------------------------------------------
 
-function HistoryTrendBar({ history }: { history: HistoryTrendType[] }) {
+function HistoryTrendBar({
+  history,
+  emptyLabel,
+}: {
+  history: HistoryTrendType[];
+  emptyLabel: string;
+}) {
   if (history.length === 0) {
     return (
       <div className="flex items-center justify-center py-6 text-sm text-muted-foreground">
-        暂无历史记录
+        {emptyLabel}
       </div>
     );
   }
@@ -161,7 +178,9 @@ export function QuizReport() {
     if (!currentSession) return;
     const { aiConfig } = useSettingsStore.getState();
     if (!hasUsableAIConfig(aiConfig)) {
-      toast.error(t("quiz.errorNoAIConfig", "请先在设置中配置 AI 端点与模型。"));
+      toast.error(
+        t("quiz.errorNoAIConfig", "Configure an AI endpoint and model in Settings first."),
+      );
       return;
     }
     setIsRestarting(true);
@@ -185,7 +204,7 @@ export function QuizReport() {
   if (!report) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-        <p className="text-lg">报告生成中...</p>
+        <p className="text-lg">{t("quiz.loadingReport", "Building report…")}</p>
       </div>
     );
   }
@@ -198,13 +217,13 @@ export function QuizReport() {
       <div className="max-w-2xl mx-auto w-full px-6 py-6 space-y-8">
         {/* ---- Summary Card ---- */}
         <div className="rounded-xl border bg-card p-6 shadow-sm">
-          <h2 className="text-lg font-bold mb-4">测验报告</h2>
+          <h2 className="text-lg font-bold mb-4">{t("quiz.reportTitle", "Quiz Report")}</h2>
           <div className="flex items-center gap-6">
-            <ScoreRing rate={summary.correctRate} />
+            <ScoreRing rate={summary.correctRate} accuracyLabel={t("quiz.accuracy", "Accuracy")} />
             <div className="space-y-2 flex-1">
               <div className="flex items-center gap-2">
                 <Target className="size-4 text-primary" />
-                <span className="text-sm text-muted-foreground">得分</span>
+                <span className="text-sm text-muted-foreground">{t("quiz.score", "Score")}</span>
                 <span className="text-2xl font-bold tabular-nums ml-auto">
                   {score}
                   <span className="text-sm font-normal text-muted-foreground">/100</span>
@@ -212,7 +231,9 @@ export function QuizReport() {
               </div>
               <div className="flex items-center gap-2">
                 <CheckCircle className="size-4 text-emerald-500" />
-                <span className="text-sm text-muted-foreground">正确</span>
+                <span className="text-sm text-muted-foreground">
+                  {t("quiz.correctCount", "Correct")}
+                </span>
                 <span className="tabular-nums ml-auto font-medium">
                   {summary.correctCount} / {summary.gradableCount}
                 </span>
@@ -220,21 +241,25 @@ export function QuizReport() {
               {summary.pendingCount > 0 && (
                 <div className="flex items-center gap-2">
                   <AlertCircle className="size-4 text-amber-500" />
-                  <span className="text-sm text-muted-foreground">待批改（简答题）</span>
+                  <span className="text-sm text-muted-foreground">
+                    {t("quiz.pendingGrading", "Awaiting grading (short answer)")}
+                  </span>
                   <span className="tabular-nums ml-auto font-medium">{summary.pendingCount}</span>
                 </div>
               )}
               <div className="flex items-center gap-2">
                 <Clock className="size-4 text-amber-500" />
-                <span className="text-sm text-muted-foreground">用时</span>
+                <span className="text-sm text-muted-foreground">
+                  {t("quiz.timeSpent", "Time Spent")}
+                </span>
                 <span className="tabular-nums ml-auto font-medium">
-                  {formatTimeSpent(summary.timeSpent)}
+                  {formatTimeSpent(summary.timeSpent, t)}
                 </span>
               </div>
             </div>
           </div>
           <Button className="w-full mt-5" onClick={handleRestart} disabled={isRestarting}>
-            {isRestarting ? "正在准备..." : "再来一次"}
+            {isRestarting ? t("quiz.preparing", "Preparing...") : t("quiz.restart", "Try again")}
           </Button>
           <Button
             variant="outline"
@@ -242,52 +267,65 @@ export function QuizReport() {
             onClick={resetQuiz}
             disabled={isRestarting}
           >
-            返回测验
+            {t("quiz.backToQuiz", "Back to quiz")}
           </Button>
         </div>
 
         {/* ---- Per-type breakdown ---- */}
         <section>
           <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
-            <Target className="size-4" /> 题型正确率
+            <Target className="size-4" /> {t("quiz.perTypeAccuracy", "Accuracy by type")}
           </h3>
           <div className="rounded-lg border overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-muted/50 text-muted-foreground">
-                  <th className="text-left px-4 py-2.5 font-medium">题型</th>
-                  <th className="text-center px-4 py-2.5 font-medium">题数</th>
-                  <th className="text-center px-4 py-2.5 font-medium">正确率</th>
-                  <th className="text-right px-4 py-2.5 font-medium">进度条</th>
+                  <th className="text-left px-4 py-2.5 font-medium">
+                    {t("quiz.typeColumn", "Type")}
+                  </th>
+                  <th className="text-center px-4 py-2.5 font-medium">
+                    {t("quiz.countColumn", "Questions")}
+                  </th>
+                  <th className="text-center px-4 py-2.5 font-medium">
+                    {t("quiz.correctRate", "Correct Rate")}
+                  </th>
+                  <th className="text-right px-4 py-2.5 font-medium">
+                    {t("quiz.progressColumn", "Progress")}
+                  </th>
                 </tr>
               </thead>
               <tbody>
                 {Object.entries(summary.correctRateByType).map(([type, rate]) => {
                   const typeCount = questions.filter((q) => q.type === type).length;
+                  const gradable = isGradableType(type);
                   return (
                     <tr key={type} className="border-t border-border">
                       <td className="px-4 py-2.5">
                         <Badge variant="secondary" className="text-xs">
-                          {TYPE_LABELS[type as QuestionType] ?? type}
+                          {TYPE_LABEL_KEYS[type as QuestionType]
+                            ? t(TYPE_LABEL_KEYS[type as QuestionType])
+                            : type}
                         </Badge>
                       </td>
                       <td className="text-center px-4 py-2.5 tabular-nums">{typeCount}</td>
                       <td className="text-center px-4 py-2.5 tabular-nums font-medium">
-                        {formatRate(rate)}
+                        {gradable ? formatRate(rate) : "—"}
                       </td>
                       <td className="px-4 py-2.5">
                         <div className="h-1.5 w-full rounded-full bg-muted">
-                          <div
-                            className={cn(
-                              "h-full rounded-full transition-all duration-500",
-                              rate >= 0.8
-                                ? "bg-emerald-500"
-                                : rate >= 0.5
-                                  ? "bg-amber-500"
-                                  : "bg-red-500",
-                            )}
-                            style={{ width: `${Math.round(rate * 100)}%` }}
-                          />
+                          {gradable && (
+                            <div
+                              className={cn(
+                                "h-full rounded-full transition-all duration-500",
+                                rate >= 0.8
+                                  ? "bg-emerald-500"
+                                  : rate >= 0.5
+                                    ? "bg-amber-500"
+                                    : "bg-red-500",
+                              )}
+                              style={{ width: `${Math.round(rate * 100)}%` }}
+                            />
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -302,7 +340,7 @@ export function QuizReport() {
         {weakAreas.length > 0 && (
           <section>
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
-              <AlertCircle className="size-4 text-amber-500" /> 薄弱领域
+              <AlertCircle className="size-4 text-amber-500" /> {t("quiz.weakAreas", "Weak Areas")}
             </h3>
             <div className="space-y-2">
               {weakAreas.map((wa) => (
@@ -319,7 +357,7 @@ export function QuizReport() {
                   />
                   <span className="text-sm flex-1 font-medium">{wa.tag}</span>
                   <span className="text-xs text-muted-foreground tabular-nums">
-                    {wa.questionCount} 题
+                    {t("quiz.questionCountShort", { count: wa.questionCount })}
                   </span>
                   <span
                     className={cn(
@@ -331,7 +369,7 @@ export function QuizReport() {
                           : "text-amber-500",
                     )}
                   >
-                    错误率 {formatRate(wa.errorRate)}
+                    {t("quiz.errorRate", { rate: formatRate(wa.errorRate) })}
                   </span>
                 </div>
               ))}
@@ -343,17 +381,19 @@ export function QuizReport() {
         {history.length > 0 && (
           <section>
             <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5">
-              <TrendingUp className="size-4" /> 历史趋势
+              <TrendingUp className="size-4" /> {t("quiz.historyTrend", "History trend")}
             </h3>
             <div className="rounded-lg border px-4 pt-3 pb-1 bg-card">
-              <HistoryTrendBar history={history} />
+              <HistoryTrendBar history={history} emptyLabel={t("quiz.noSessions")} />
             </div>
           </section>
         )}
 
         {/* ---- Question review list ---- */}
         <section>
-          <h3 className="text-sm font-semibold mb-3">题目回顾</h3>
+          <h3 className="text-sm font-semibold mb-3">
+            {t("quiz.questionReview", "Question review")}
+          </h3>
           <div className="space-y-2">
             {questions.map((q, idx) => (
               <Collapsible
@@ -385,7 +425,7 @@ export function QuizReport() {
                       {q.stem}
                     </span>
                     <Badge variant="secondary" className="text-xs shrink-0">
-                      {TYPE_LABELS[q.type]}
+                      {t(TYPE_LABEL_KEYS[q.type])}
                     </Badge>
                   </button>
                 </CollapsibleTrigger>
@@ -394,7 +434,9 @@ export function QuizReport() {
                     {/* Options display */}
                     {q.options && q.options.length > 0 && (
                       <div>
-                        <span className="text-xs text-muted-foreground font-medium">选项：</span>
+                        <span className="text-xs text-muted-foreground font-medium">
+                          {t("quiz.optionsLabel", "Options")}:
+                        </span>
                         <ul className="mt-1 space-y-0.5">
                           {q.options.map((opt) => {
                             const isCorrectOpt = Array.isArray(q.answer.correct)
@@ -424,7 +466,9 @@ export function QuizReport() {
                     {/* User + correct answer */}
                     <div className="flex gap-4 text-xs">
                       <div>
-                        <span className="text-muted-foreground">你的答案：</span>
+                        <span className="text-muted-foreground">
+                          {t("quiz.yourAnswer", "Your answer")}:
+                        </span>
                         <span
                           className={cn(
                             "font-medium",
@@ -439,11 +483,13 @@ export function QuizReport() {
                             ? Array.isArray(q.userAnswer)
                               ? (q.userAnswer as string[]).join(", ")
                               : String(q.userAnswer)
-                            : "未作答"}
+                            : t("quiz.notAnswered", "Not answered")}
                         </span>
                       </div>
                       <div>
-                        <span className="text-muted-foreground">正确答案：</span>
+                        <span className="text-muted-foreground">
+                          {t("quiz.correctAnswer", "Correct answer")}:
+                        </span>
                         <span className="font-medium text-emerald-600">
                           {Array.isArray(q.answer.correct)
                             ? (q.answer.correct as string[]).join(", ")
@@ -454,7 +500,7 @@ export function QuizReport() {
 
                     {/* Explanation */}
                     <p className="text-xs text-muted-foreground leading-relaxed border-t border-border pt-2 mt-1">
-                      <span className="font-medium">解析：</span>
+                      <span className="font-medium">{t("quiz.explanation", "Explanation")}:</span>
                       {q.answer.explanation}
                     </p>
                   </div>

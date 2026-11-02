@@ -18,17 +18,18 @@ import {
   Clock,
   XCircle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-const TYPE_LABELS: Record<QuestionType, string> = {
-  single_choice: "单选题",
-  multi_choice: "多选题",
-  true_false: "判断题",
-  short_answer: "简答题",
+const TYPE_LABEL_KEYS: Record<QuestionType, string> = {
+  single_choice: "quiz.singleChoice",
+  multi_choice: "quiz.multiChoice",
+  true_false: "quiz.trueFalse",
+  short_answer: "quiz.shortAnswer",
 };
 
 const TYPE_COLORS: Record<QuestionType, string> = {
@@ -38,10 +39,10 @@ const TYPE_COLORS: Record<QuestionType, string> = {
   short_answer: "bg-teal-100 text-teal-700 border-teal-200",
 };
 
-const DIFFICULTY_LABELS: Record<number, string> = {
-  1: "简单",
-  2: "中等",
-  3: "困难",
+const DIFFICULTY_LABEL_KEYS: Record<number, string> = {
+  1: "quiz.easy",
+  2: "quiz.medium",
+  3: "quiz.hard",
 };
 
 const DIFFICULTY_STARS: Record<number, string> = {
@@ -61,6 +62,7 @@ function formatElapsed(seconds: number): string {
 // ---------------------------------------------------------------------------
 
 export function QuizPlayer() {
+  const { t } = useTranslation();
   const currentQuestions = useQuizStore((s) => s.currentQuestions);
   const currentQuestionIndex = useQuizStore((s) => s.currentQuestionIndex);
   const submitAnswer = useQuizStore((s) => s.submitAnswer);
@@ -91,6 +93,23 @@ export function QuizPlayer() {
     const id = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(id);
   }, []);
+
+  // Checkpoint the elapsed time so a resumed quiz continues the clock instead
+  // of restarting at 0. Flush once more when the player unmounts.
+  const saveElapsed = useQuizStore((s) => s.saveElapsed);
+  const elapsedRef = useRef(elapsed);
+  useEffect(() => {
+    elapsedRef.current = elapsed;
+  }, [elapsed]);
+  useEffect(() => {
+    const id = setInterval(() => {
+      void saveElapsed(elapsedRef.current);
+    }, 15000);
+    return () => {
+      clearInterval(id);
+      void saveElapsed(elapsedRef.current);
+    };
+  }, [saveElapsed]);
 
   // -------------------------------------------------------------------
   // Navigation
@@ -236,9 +255,9 @@ export function QuizPlayer() {
   if (!question) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-muted-foreground">
-        <p className="text-lg">没有问题可显示</p>
+        <p className="text-lg">{t("quiz.noQuestionsToShow", "No questions to show")}</p>
         <Button variant="outline" className="mt-4" onClick={resetQuiz}>
-          返回测验
+          {t("quiz.backToQuiz", "Back to quiz")}
         </Button>
       </div>
     );
@@ -254,14 +273,14 @@ export function QuizPlayer() {
           </span>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className={cn("text-xs border", TYPE_COLORS[question.type])}>
-              {TYPE_LABELS[question.type]}
+              {t(TYPE_LABEL_KEYS[question.type])}
             </Badge>
             <span
               className={cn(
                 "text-xs tabular-nums",
                 question.difficulty <= 2 ? "text-amber-600" : "text-red-500",
               )}
-              title={DIFFICULTY_LABELS[question.difficulty]}
+              title={t(DIFFICULTY_LABEL_KEYS[question.difficulty] ?? "quiz.difficulty")}
             >
               {DIFFICULTY_STARS[question.difficulty]}
             </span>
@@ -388,7 +407,10 @@ export function QuizPlayer() {
                   disabled={multiSelect.size === 0}
                   onClick={handleMultiSubmit}
                 >
-                  确认选择 ({multiSelect.size})
+                  {t("quiz.confirmSelection", {
+                    count: multiSelect.size,
+                    defaultValue: `Confirm selection (${multiSelect.size})`,
+                  })}
                 </Button>
               )}
             </>
@@ -401,7 +423,10 @@ export function QuizPlayer() {
                 const isSelected = userHasAnswered && question.userAnswer === val;
                 const isCorrectVal =
                   userHasAnswered && answersEqual(question, String(question.answer.correct), val);
-                const label = val === "true" ? "✓ 正确" : "✗ 错误";
+                const label =
+                  val === "true"
+                    ? `✓ ${t("quiz.trueLabel", "True")}`
+                    : `✗ ${t("quiz.falseLabel", "False")}`;
 
                 return (
                   <button
@@ -438,7 +463,7 @@ export function QuizPlayer() {
             <div className="space-y-2">
               <textarea
                 className="flex min-h-[120px] w-full rounded-md border border-border bg-background px-3 py-2 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary"
-                placeholder="输入你的回答..."
+                placeholder={t("quiz.shortAnswerPlaceholder", "Type your answer...")}
                 value={textareaValue}
                 onChange={(e) => setTextareaValue(e.target.value)}
               />
@@ -449,7 +474,7 @@ export function QuizPlayer() {
                   disabled={!textareaValue.trim()}
                   onClick={handleShortAnswer}
                 >
-                  提交回答
+                  {t("quiz.submitAnswer", "Submit answer")}
                 </Button>
               </div>
             </div>
@@ -458,14 +483,20 @@ export function QuizPlayer() {
           {question.type === "short_answer" && userHasAnswered && (
             <div className="rounded-lg border p-4 bg-muted/30 text-sm space-y-2">
               <div>
-                <span className="font-medium text-muted-foreground">你的回答：</span>
+                <span className="font-medium text-muted-foreground">
+                  {t("quiz.yourAnswer", "Your answer")}:
+                </span>
                 <p className="mt-1 whitespace-pre-wrap">{String(question.userAnswer)}</p>
               </div>
               <div>
-                <span className="font-medium text-muted-foreground">参考答案：</span>
+                <span className="font-medium text-muted-foreground">
+                  {t("quiz.referenceAnswer", "Reference answer")}:
+                </span>
                 <p className="mt-1 whitespace-pre-wrap">{correctAnswerLabel}</p>
               </div>
-              <p className="text-xs text-muted-foreground italic">简答题需人工评分，请继续作答。</p>
+              <p className="text-xs text-muted-foreground italic">
+                {t("quiz.shortAnswerManual", "Short answers are graded manually.")}
+              </p>
             </div>
           )}
         </div>
@@ -483,7 +514,7 @@ export function QuizPlayer() {
               ) : (
                 <ChevronDown className="size-3.5" />
               )}
-              查看解析
+              {t("quiz.showExplanation", "Show explanation")}
             </button>
             {expandedReview.has(question.id) && (
               <div
@@ -498,12 +529,12 @@ export function QuizPlayer() {
                   {isCorrect ? (
                     <>
                       <CheckCircle className="size-4 text-emerald-500" />
-                      回答正确
+                      {t("quiz.answerCorrect", "Correct")}
                     </>
                   ) : (
                     <>
                       <XCircle className="size-4 text-red-500" />
-                      回答错误
+                      {t("quiz.answerIncorrect", "Incorrect")}
                     </>
                   )}
                 </p>
@@ -518,16 +549,20 @@ export function QuizPlayer() {
       <div className="flex items-center justify-between px-4 py-3 border-t border-border bg-background/95 backdrop-blur-sm">
         <Button variant="ghost" size="sm" disabled={localIndex === 0} onClick={goPrev}>
           <ArrowLeft className="size-4" />
-          上一题
+          {t("quiz.prevQuestion", "Previous")}
         </Button>
 
         <span className="text-xs text-muted-foreground tabular-nums">
-          已答 {answeredCount}/{total}
+          {t("quiz.answeredProgress", {
+            answered: answeredCount,
+            total,
+            defaultValue: `Answered ${answeredCount}/${total}`,
+          })}
         </span>
 
         {localIndex < total - 1 ? (
           <Button variant="ghost" size="sm" onClick={goNext}>
-            下一题
+            {t("quiz.nextQuestion", "Next")}
             <ArrowRight className="size-4" />
           </Button>
         ) : (
@@ -538,10 +573,13 @@ export function QuizPlayer() {
             disabled={isCompleting}
           >
             {isCompleting
-              ? "提交中..."
+              ? t("quiz.submitting", "Submitting...")
               : confirmingComplete
-                ? `还有 ${unansweredCount} 题未答，确认提交`
-                : "完成测验"}
+                ? t("quiz.unansweredConfirm", {
+                    count: unansweredCount,
+                    defaultValue: `${unansweredCount} question(s) left unanswered. Submit anyway?`,
+                  })
+                : t("quiz.complete", "Finish Quiz")}
           </Button>
         )}
       </div>

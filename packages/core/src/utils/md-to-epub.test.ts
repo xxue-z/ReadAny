@@ -363,4 +363,31 @@ describe("MdToEpubConverter", () => {
       expect(opf).toContain('media-type="image/jpeg"');
     });
   });
+
+  describe("heading-only chapter stubs", () => {
+    it("drops a heading that is immediately followed by a sub-heading", () => {
+      // "# Title" has no body before "## Section", so it would be a blank page.
+      const result = converter.convertToBytes({
+        markdown: "# Title\n## Section\n\nbody",
+      });
+      expect(result.chapterCount).toBe(1);
+      expect(result.bookTitle).toBe("Title");
+      const chapter = entryText(result.epubBytes, "OEBPS/chapter1.xhtml");
+      expect(chapter).toContain("Section");
+      expect(chapter).toContain("body");
+    });
+
+    it("keeps a title-only document as one chapter", () => {
+      const result = converter.convertToBytes({ markdown: "# Only Title" });
+      expect(result.chapterCount).toBe(1);
+      expect(result.bookTitle).toBe("Only Title");
+    });
+
+    it("still splits chapters that do have body text", () => {
+      const result = converter.convertToBytes({
+        markdown: "# One\n\nfirst\n\n## Two\n\nsecond",
+      });
+      expect(result.chapterCount).toBe(2);
+    });
+  });
 });
