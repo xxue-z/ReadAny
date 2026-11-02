@@ -20,6 +20,7 @@ import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
   Alert,
+  AppState,
   Platform,
   ScrollView,
   StyleSheet,
@@ -162,14 +163,6 @@ function getMdPath(bookId: string): Promise<string> {
   })();
 }
 
-function getEpubPath(bookId: string): Promise<string> {
-  return (async () => {
-    const platform = getPlatformService();
-    const appData = await platform.getAppDataDir();
-    return platform.joinPath(appData, `books/${bookId}.epub`);
-  })();
-}
-
 // Helper: insert Markdown syntax at cursor position
 function applyMarkdownSyntax(
   text: string,
@@ -207,7 +200,7 @@ export function DocumentEditorScreen() {
   const layout = useResponsiveLayout();
   const { bookId } = route.params;
   const book = useLibraryStore((s) => s.books.find((b) => b.id === bookId));
-  const updateBook = useLibraryStore((s) => s.updateBook);
+  const saveDocument = useLibraryStore((s) => s.saveDocument);
 
   const [markdown, setMarkdown] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -216,6 +209,7 @@ export function DocumentEditorScreen() {
 
   const inputRef = useRef<TextInput>(null);
   const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const s = useMemo(() => makeStyles(colors, layout.horizontalPadding), [colors, layout]);
 
@@ -245,27 +239,50 @@ export function DocumentEditorScreen() {
     };
   }, [bookId]);
 
+  const debouncedSave = useCallback(() => {
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      saveDocument(bookId, markdown).catch((err) => {
+        console.warn("[DocumentEditor] Auto-save failed:", err);
+      });
+    }, 3000);
+  }, [bookId, markdown, saveDocument]);
+
+  const handleChangeText = useCallback(
+    (text: string) => {
+      setMarkdown(text);
+      debouncedSave();
+    },
+    [debouncedSave],
+  );
+
+  // Auto-save on app background
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "background" || nextState === "inactive") {
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+        saveDocument(bookId, markdown).catch((err) => {
+          console.warn("[DocumentEditor] Background auto-save failed:", err);
+        });
+      }
+    });
+    return () => {
+      subscription.remove();
+    };
+  }, [bookId, markdown, saveDocument]);
+
+  // Cleanup timer on unmount
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, []);
+
   const handleSave = useCallback(async () => {
     if (isSaving) return;
     setIsSaving(true);
     try {
-      const title = markdown.match(/^#\s+(.+)/m)?.[1]?.trim() || book?.meta.title || "Untitled";
-      const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
-      const converter = new MdToEpubConverter();
-      const result = converter.convertToBytes({ markdown, title });
-
-      const mdPath = await getMdPath(bookId);
-      const epubPath = await getEpubPath(bookId);
-      const platform = getPlatformService();
-      const encoder = new TextEncoder();
-      await platform.writeFile(mdPath, encoder.encode(markdown));
-      await platform.writeFile(epubPath, result.epubBytes);
-
-      await updateBook(bookId, {
-        meta: { ...book?.meta, title: result.bookTitle },
-        updatedAt: Date.now(),
-      });
-
+      await saveDocument(bookId, markdown);
       Alert.alert("", t("library.editor.saved", "已保存"));
     } catch (err) {
       console.error("[DocumentEditor] Save failed:", err);
@@ -273,7 +290,7 @@ export function DocumentEditorScreen() {
     } finally {
       setIsSaving(false);
     }
-  }, [markdown, bookId, book?.meta, updateBook, isSaving, t]);
+  }, [bookId, markdown, saveDocument, isSaving, t]);
 
   const handleToolbarAction = useCallback(
     (syntax: { prefix: string; suffix: string; placeholder: string }) => {
@@ -393,7 +410,7 @@ export function DocumentEditorScreen() {
             ref={inputRef}
             style={s.editor}
             value={markdown}
-            onChangeText={setMarkdown}
+            onChangeText={handleChangeText}
             onSelectionChange={(e) => {
               selectionRef.current = e.nativeEvent.selection;
             }}

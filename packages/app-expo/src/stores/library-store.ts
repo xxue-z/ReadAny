@@ -106,6 +106,7 @@ export interface LibraryState {
   addTagToBook: (bookId: string, tag: string) => void;
   removeTagFromBook: (bookId: string, tag: string) => void;
   createDocument: (title?: string) => Promise<Book | null>;
+  saveDocument: (bookId: string, markdown: string) => Promise<void>;
 }
 
 async function resolveAppPath(relativePath: string): Promise<string> {
@@ -1683,5 +1684,27 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     };
     await get().addBook(book);
     return book;
+  },
+
+  saveDocument: async (bookId, markdown) => {
+    const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
+    const converter = new MdToEpubConverter();
+    const result = converter.convertToBytes({ markdown });
+    const platform = getPlatformService();
+    await ensureAppSubDir("books");
+    const relativeEpub = `books/${bookId}.epub`;
+    const relativeMd = `books/${bookId}.md`;
+    const epubPath = await resolveAppPath(relativeEpub);
+    const mdPath = await resolveAppPath(relativeMd);
+    const encoder = new TextEncoder();
+    await platform.writeFile(epubPath, result.epubBytes);
+    await platform.writeFile(mdPath, encoder.encode(markdown));
+    const book = get().books.find((b) => b.id === bookId);
+    if (book && result.bookTitle !== book.meta.title) {
+      await get().updateBook(bookId, {
+        meta: { ...book.meta, title: result.bookTitle },
+        updatedAt: Date.now(),
+      });
+    }
   },
 }));
