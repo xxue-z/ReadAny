@@ -33,6 +33,7 @@
     "./epub/*": "./src/epub/*.ts",
     "./db": "./src/db/index.ts",
     "./db/*": "./src/db/*.ts",
+    "./quiz/*": "./src/quiz/*.ts",
     "./stats": "./src/stats/index.ts",
     "./stats/*": "./src/stats/*.ts",
     "./translation": "./src/translation/translator.ts",
