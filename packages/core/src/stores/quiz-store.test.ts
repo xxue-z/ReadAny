@@ -21,6 +21,9 @@ const mem = vi.hoisted(() => {
 const gen = vi.hoisted(() => ({
   questions: [] as any[],
   throwOnGenerate: null as Error | null,
+  /** When set, generation waits for this promise (for cancellation tests). */
+  gate: null as Promise<void> | null,
+  seenSignal: null as AbortSignal | null,
 }));
 
 vi.mock("../db/quiz-queries", () => ({
@@ -51,7 +54,13 @@ vi.mock("../db/quiz-queries", () => ({
 }));
 
 vi.mock("../quiz/quiz-generator", () => ({
-  generateQuizQuestions: async () => {
+  generateQuizQuestions: async (
+    _config: unknown,
+    _aiConfig: unknown,
+    options?: { signal?: AbortSignal },
+  ) => {
+    gen.seenSignal = options?.signal ?? null;
+    if (gen.gate) await gen.gate;
     if (gen.throwOnGenerate) throw gen.throwOnGenerate;
     return gen.questions;
   },
@@ -68,6 +77,7 @@ vi.mock("../quiz/report-builder", () => ({
         totalQuestions: questions.length,
         gradableCount: gradable.length,
         pendingCount: 0,
+        unansweredCount: questions.filter((q) => q.userAnswer === undefined).length,
         correctCount,
         correctRate: gradable.length > 0 ? correctCount / gradable.length : 0,
         timeSpent: 0,
@@ -121,6 +131,8 @@ beforeEach(() => {
   mem.reset();
   gen.questions = [];
   gen.throwOnGenerate = null;
+  gen.gate = null;
+  gen.seenSignal = null;
   useQuizStore.setState({
     sessions: [],
     currentSession: null,
@@ -193,6 +205,7 @@ describe("startQuiz generation guards", () => {
           totalQuestions: 1,
           gradableCount: 1,
           pendingCount: 0,
+          unansweredCount: 0,
           correctCount: 1,
           correctRate: 1,
           timeSpent: 0,
@@ -254,6 +267,30 @@ describe("answering", () => {
   });
 });
 
+describe("generation cancellation", () => {
+  it("cancels an in-flight generation without persisting a session", async () => {
+    let release: () => void = () => {};
+    gen.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const pending = useQuizStore.getState().startQuiz(config, aiConfig);
+    expect(useQuizStore.getState().isGenerating).toBe(true);
+    expect(gen.seenSignal).not.toBeNull();
+
+    useQuizStore.getState().cancelGeneration();
+    expect(gen.seenSignal?.aborted).toBe(true);
+    expect(useQuizStore.getState().isGenerating).toBe(false);
+
+    release();
+    await pending;
+
+    expect(mem.sessions.size).toBe(0);
+    expect(useQuizStore.getState().currentSession).toBeNull();
+    expect(useQuizStore.getState().isTaking).toBe(false);
+  });
+});
+
 describe("completion and reset", () => {
   it("builds the report, grades the session, and can return to setup", async () => {
     gen.questions = [makeQuestion({ id: "gen-1" })];
@@ -287,6 +324,26 @@ describe("completion and reset", () => {
     expect(state.currentSession?.timeSpent).toBe(93);
     expect(state.report?.summary.timeSpent).toBe(93);
     expect(mem.sessions.get(state.currentSession?.id ?? "")?.timeSpent).toBe(93);
+  });
+
+  it("does not invent a 0/100 score for a short-answer-only quiz", async () => {
+    gen.questions = [
+      makeQuestion({
+        id: "sa-1",
+        type: "short_answer",
+        options: undefined,
+        answer: { correct: "自由作答", explanation: "" },
+      }),
+    ];
+    await useQuizStore.getState().startQuiz(config, aiConfig);
+    await useQuizStore.getState().completeQuiz(30);
+
+    const state = useQuizStore.getState();
+    expect(state.report?.summary.gradableCount).toBe(0);
+    expect(state.currentSession?.status).toBe("graded");
+    // No score is fabricated — the session keeps whatever the DB had (null/undefined).
+    expect(state.currentSession?.score).toBeUndefined();
+    expect(mem.sessions.get(state.currentSession?.id ?? "")?.score).toBeUndefined();
   });
 
   it("opens a graded session as its report instead of a live quiz", async () => {

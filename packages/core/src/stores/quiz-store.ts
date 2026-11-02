@@ -72,6 +72,9 @@ export interface QuizState {
   /** Finish the quiz: build a report, persist the final score, and stop taking. */
   completeQuiz: (timeSpentSeconds?: number) => Promise<void>;
 
+  /** Abort an in-flight generation (the "cancel" button while generating). */
+  cancelGeneration: () => void;
+
   /** Return from the report (or an empty quiz) back to the setup screen. */
   resetQuiz: () => void;
 
@@ -122,6 +125,9 @@ function autoGrade(question: QuizQuestion, userAnswer: string | string[]): boole
 // Store
 // ---------------------------------------------------------------------------
 
+/** In-flight generation, so `cancelGeneration` can abort the LLM request. */
+let activeGeneration: AbortController | null = null;
+
 export const useQuizStore = create<QuizState>((set, get) => ({
   sessions: [],
   currentSession: null,
@@ -140,6 +146,9 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     // keeps rendering the old report even after a new quiz has been generated.
     set({ isGenerating: true, report: null });
 
+    const controller = new AbortController();
+    activeGeneration = controller;
+
     try {
       if (!aiConfig?.activeEndpointId || !aiConfig.activeModel) {
         throw new QuizGenerationError("NO_AI_CONFIG");
@@ -147,10 +156,20 @@ export const useQuizStore = create<QuizState>((set, get) => ({
 
       let questions: QuizQuestion[];
       try {
-        questions = await generateQuizQuestions(config, aiConfig);
+        questions = await generateQuizQuestions(config, aiConfig, { signal: controller.signal });
       } catch (err) {
+        // A cancelled generation is not an error the user needs to see.
+        if (controller.signal.aborted) {
+          set({ isGenerating: false });
+          return;
+        }
         console.error("[QuizStore] Question generation failed:", err);
         throw new QuizGenerationError("GENERATION_FAILED");
+      }
+
+      if (controller.signal.aborted) {
+        set({ isGenerating: false });
+        return;
       }
 
       if (questions.length === 0) {
@@ -197,7 +216,19 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     } catch (err) {
       set({ isGenerating: false });
       throw err;
+    } finally {
+      if (activeGeneration === controller) activeGeneration = null;
     }
+  },
+
+  // -------------------------------------------------------------------------
+  // cancelGeneration
+  // -------------------------------------------------------------------------
+
+  cancelGeneration: () => {
+    activeGeneration?.abort();
+    activeGeneration = null;
+    set({ isGenerating: false });
   },
 
   // -------------------------------------------------------------------------
@@ -251,13 +282,16 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     // isCorrect undefined, which the report treats as "pending", not wrong.
     const report = await buildQuizReport(currentSession.id);
 
-    // Score is a 0–100 integer derived from the correct-rate fraction.
-    const score = Math.round(report.summary.correctRate * 100);
+    // Score is a 0–100 integer derived from the correct-rate fraction. A quiz
+    // made only of short-answer questions has nothing to auto-grade, so it must
+    // not be reported as 0/100 — leave the score unset instead.
+    const score =
+      report.summary.gradableCount > 0 ? Math.round(report.summary.correctRate * 100) : undefined;
     const completedAt = Date.now();
 
     await updateQuizSession(currentSession.id, {
       status: "graded",
-      score,
+      ...(score !== undefined ? { score } : {}),
       timeSpent,
       completedAt,
     });

@@ -358,7 +358,7 @@ export async function getQuestionBank(query?: {
     questionId: r.question_id,
     tags: JSON.parse(r.tags) as string[],
     usageCount: r.usage_count,
-    correctRate: r.correct_rate ?? 0,
+    correctRate: r.correct_rate ?? undefined,
     variantOf: r.variant_of ?? undefined,
     createdAt: r.created_at,
     stem: r.stem ?? undefined,
@@ -419,13 +419,20 @@ export async function updateQuestionBankStats(questions: QuizQuestion[]): Promis
   const database = await getDB();
 
   for (const question of questions) {
+    // Bank entries reference the *original* question row; a question re-used in
+    // a new session is a clone with a fresh id, so fall back to the stem.
     const rows = await database.select<{
       id: string;
       usage_count: number;
       correct_rate: number | null;
-    }>("SELECT id, usage_count, correct_rate FROM question_bank WHERE question_id = ?", [
-      question.id,
-    ]);
+    }>(
+      `SELECT qb.id AS id, qb.usage_count AS usage_count, qb.correct_rate AS correct_rate
+       FROM question_bank qb
+       LEFT JOIN quiz_questions qq ON qb.question_id = qq.id
+       WHERE qb.question_id = ? OR qq.stem = ?
+       LIMIT 1`,
+      [question.id, question.stem],
+    );
     const entry = rows[0];
     if (!entry) continue;
 

@@ -30,6 +30,8 @@ interface LLMQuestionResponse {
   answer?: { correct?: string | string[]; explanation?: string };
   difficulty?: number;
   tags?: unknown;
+  /** 1-based index of the source context block (see buildGenerationPrompt). */
+  contextIndex?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -272,6 +274,7 @@ function buildGenerationPrompt(
 - For true_false: options [{key: "A", content: "True"}, {key: "B", content: "False"}], answer.correct is "A" or "B"
 - For short_answer: no options, answer.correct is the model answer string
 - "tags": 1-3 short knowledge-point tags (same language as the stem)
+- "contextIndex": the 1-based number of the Context block the question is based on
 
 ## Source Material
 ${contextBlocks.join("\n\n")}
@@ -284,7 +287,8 @@ Return ONLY a valid JSON array. Each element must have exactly these fields:
   "options": [{"key": "A", "content": "..."}, ...],  // omit for short_answer
   "answer": {"correct": "A" | ["A","B"] | "model answer", "explanation": "why this is correct"},
   "difficulty": ${difficulty},
-  "tags": ["knowledge point"]
+  "tags": ["knowledge point"],
+  "contextIndex": 1
 }
 
 Output ONLY the JSON array — no markdown fences, no extra text.`;
@@ -338,29 +342,77 @@ export function extractJson(text: string): string {
   return cleaned.trim();
 }
 
+/** Keys that commonly wrap a question array in a JSON envelope. */
+const QUESTION_ARRAY_KEYS = ["questions", "items", "data", "result", "results", "quiz"];
+
+function looksLikeQuestion(value: unknown): value is LLMQuestionResponse {
+  return (
+    !!value && typeof value === "object" && typeof (value as { stem?: unknown }).stem === "string"
+  );
+}
+
+/** Pull a question array out of an envelope object such as `{"questions":[…]}`. */
+function extractQuestionArray(parsed: Record<string, unknown>): LLMQuestionResponse[] | null {
+  for (const key of QUESTION_ARRAY_KEYS) {
+    const candidate = parsed[key];
+    if (Array.isArray(candidate) && candidate.some(looksLikeQuestion)) {
+      return candidate.filter(looksLikeQuestion);
+    }
+  }
+  return null;
+}
+
+function normalizeParsedQuestions(parsed: unknown): LLMQuestionResponse[] | null {
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && typeof parsed === "object") {
+    const nested = extractQuestionArray(parsed as Record<string, unknown>);
+    if (nested) return nested;
+    // Single object → wrap in array
+    return [parsed as LLMQuestionResponse];
+  }
+  return null;
+}
+
 export function tryParseAsQuestions(raw: string): LLMQuestionResponse[] | null {
   const json = extractJson(raw);
   if (!json) return null;
 
   // Try direct parse
   try {
-    const parsed = JSON.parse(json);
-    if (Array.isArray(parsed)) return parsed;
-    // Single object → wrap in array
-    if (parsed && typeof parsed === "object") return [parsed];
+    const result = normalizeParsedQuestions(JSON.parse(json));
+    if (result) return result;
     return null;
   } catch {
-    // fall through to regex extraction
+    // fall through to balanced-bracket extraction
   }
 
-  // Try to find a JSON array with balanced brackets
-  const arrayMatch = findBalancedArray(json);
-  if (arrayMatch) {
+  // Extract the outermost balanced value. Which bracket comes first decides
+  // what the payload is: `[ {...} ]` → array, `{ …, "options": [ … ] }` →
+  // single object. Taking the array first would latch onto the nested `options`
+  // array and discard the question itself.
+  const arrayStart = json.indexOf("[");
+  const objectStart = json.indexOf("{");
+  const preferArray = arrayStart !== -1 && (objectStart === -1 || arrayStart < objectStart);
+
+  const candidates: string[] = [];
+  if (preferArray) {
+    const arrayMatch = findBalancedArray(json);
+    if (arrayMatch) candidates.push(arrayMatch);
+    const objectMatch = findBalancedObject(json);
+    if (objectMatch) candidates.push(objectMatch);
+  } else {
+    const objectMatch = findBalancedObject(json);
+    if (objectMatch) candidates.push(objectMatch);
+    const arrayMatch = findBalancedArray(json);
+    if (arrayMatch) candidates.push(arrayMatch);
+  }
+
+  for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(arrayMatch);
-      if (Array.isArray(parsed)) return parsed;
+      const result = normalizeParsedQuestions(JSON.parse(candidate));
+      if (result && result.length > 0) return result;
     } catch {
-      // continue
+      // try the next candidate
     }
   }
 
@@ -373,7 +425,16 @@ export function tryParseAsQuestions(raw: string): LLMQuestionResponse[] | null {
 
 /** Find a balanced JSON array in a string. */
 function findBalancedArray(text: string): string | null {
-  const start = text.indexOf("[");
+  return findBalancedValue(text, "[");
+}
+
+/** Find a balanced JSON object in a string. */
+function findBalancedObject(text: string): string | null {
+  return findBalancedValue(text, "{");
+}
+
+function findBalancedValue(text: string, opener: "[" | "{"): string | null {
+  const start = text.indexOf(opener);
   if (start === -1) return null;
 
   let depth = 0;
@@ -463,12 +524,47 @@ function findJsonObjects(text: string): LLMQuestionResponse[] {
   return objects;
 }
 
+export interface ValidateQuestionOptions {
+  /** Context blocks the questions were generated from (for source attribution). */
+  contexts?: ChunkContext[];
+  /**
+   * Called when a question is valid but its stem already exists in the question
+   * bank. The caller may use it to top up a short quiz instead of failing.
+   */
+  onBankDuplicate?: (question: QuizQuestion) => void;
+}
+
+/** Attribute a generated question to the context block it came from. */
+function resolveQuestionSource(
+  raw: LLMQuestionResponse,
+  contexts: ChunkContext[] | undefined,
+): { sourceBookId?: string; sourceChapter?: string } {
+  if (!contexts || contexts.length === 0) return {};
+
+  const index = typeof raw.contextIndex === "number" ? Math.round(raw.contextIndex) : undefined;
+  if (index !== undefined && index >= 1 && index <= contexts.length) {
+    const context = contexts[index - 1];
+    if (context) {
+      return { sourceBookId: context.bookId, sourceChapter: context.chapterTitle };
+    }
+  }
+
+  // The model did not tell us which context it used. Only safe to attribute when
+  // there is a single book in scope.
+  const bookIds = [...new Set(contexts.map((context) => context.bookId))];
+  if (bookIds.length === 1) {
+    return { sourceBookId: bookIds[0], sourceChapter: contexts[0]?.chapterTitle };
+  }
+  return {};
+}
+
 export function validateAndMapQuestion(
   raw: LLMQuestionResponse,
   sessionId: string,
   defaultDifficulty: number,
   seenStems: Set<string>,
   existingHashes: Set<string>,
+  validateOptions?: ValidateQuestionOptions,
 ): QuizQuestion | null {
   // Must have a stem
   if (!raw.stem || typeof raw.stem !== "string" || raw.stem.trim().length === 0) {
@@ -480,13 +576,6 @@ export function validateAndMapQuestion(
   if (!type || !ALL_QUESTION_TYPES.includes(type)) {
     return null;
   }
-
-  // Dedup: skip if stem hash already exists
-  const hash = stemHash(raw.stem);
-  if (existingHashes.has(hash) || seenStems.has(hash)) {
-    return null;
-  }
-  seenStems.add(hash);
 
   // Validate answer
   const answer = raw.answer;
@@ -518,20 +607,34 @@ export function validateAndMapQuestion(
       : defaultDifficulty;
 
   const tags = normalizeTags(raw.tags);
+  const source = resolveQuestionSource(raw, validateOptions?.contexts);
 
-  return {
+  const question: QuizQuestion = {
     id: generateId(),
     sessionId,
     type,
     stem: raw.stem.trim(),
     options,
     answer: { correct, explanation },
-    sourceBookId: undefined, // filled by caller if needed
-    sourceChapter: undefined,
+    sourceBookId: source.sourceBookId,
+    sourceChapter: source.sourceChapter,
     difficulty,
     createdAt: Date.now(),
     tags: tags.length > 0 ? tags : undefined,
   };
+
+  // Dedup: skip stems already in the bank (they can be re-used from the bank
+  // instead) or already produced in this batch.
+  const hash = stemHash(question.stem);
+  if (seenStems.has(hash)) return null;
+  if (existingHashes.has(hash)) {
+    seenStems.add(hash);
+    validateOptions?.onBankDuplicate?.(question);
+    return null;
+  }
+  seenStems.add(hash);
+
+  return question;
 }
 
 /** Normalise the LLM-provided tags into a small, de-duplicated string array. */
@@ -573,6 +676,44 @@ export function cloneQuestionForSession(
 // Public API
 // ---------------------------------------------------------------------------
 
+/** Hard cap for one generation call so a hung provider cannot freeze the UI. */
+const DEFAULT_GENERATION_TIMEOUT_MS = 180_000;
+
+/**
+ * Combine the caller's abort signal with a timeout. Always returns a signal so
+ * a cancelled/timed-out request rejects instead of waiting forever.
+ */
+function withGenerationTimeout(external?: AbortSignal): {
+  signal: AbortSignal;
+  dispose: () => void;
+} {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error("quiz generation timed out")),
+    DEFAULT_GENERATION_TIMEOUT_MS,
+  );
+
+  const onExternalAbort = () => controller.abort(external?.reason);
+  if (external) {
+    if (external.aborted) controller.abort(external.reason);
+    else external.addEventListener("abort", onExternalAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      clearTimeout(timer);
+      external?.removeEventListener("abort", onExternalAbort);
+    },
+  };
+}
+
+/** Optional generation controls (cancellation). */
+export interface GenerateQuizOptions {
+  /** Abort the LLM request (user pressed "cancel"). */
+  signal?: AbortSignal;
+}
+
 /**
  * Generate quiz questions for a session.
  *
@@ -588,11 +729,13 @@ export function cloneQuestionForSession(
  *
  * @param config Quiz generation configuration
  * @param aiConfig Optional AI configuration needed for the generated portion
+ * @param options Optional cancellation signal
  * @returns Generated QuizQuestion array (may be empty or partial on LLM failure)
  */
 export async function generateQuizQuestions(
   config: QuizConfig,
   aiConfig?: AIConfig,
+  generationOptions?: GenerateQuizOptions,
 ): Promise<QuizQuestion[]> {
   const sessionId = generateId();
   const totalRequested = Math.max(0, Math.floor(config.questionCount));
@@ -714,10 +857,19 @@ export async function generateQuizQuestions(
       return reused.slice(0, totalRequested);
     }
     const model = await createChatModel(aiConfig, { temperature: 0.7, streaming: false });
-    const result = await model.invoke(prompt);
-    response = typeof result.content === "string" ? result.content : String(result.content ?? "");
+    const { signal, dispose } = withGenerationTimeout(generationOptions?.signal);
+    try {
+      const result = await model.invoke(prompt, { signal });
+      response = typeof result.content === "string" ? result.content : String(result.content ?? "");
+    } finally {
+      dispose();
+    }
   } catch (err) {
-    console.error("[QuizGenerator] LLM generation failed:", err);
+    if (generationOptions?.signal?.aborted) {
+      console.warn("[QuizGenerator] Generation cancelled by the user.");
+    } else {
+      console.error("[QuizGenerator] LLM generation failed:", err);
+    }
     return reused.slice(0, totalRequested);
   }
 
@@ -734,6 +886,10 @@ export async function generateQuizQuestions(
   // Seed dedup with the reused stems so the LLM cannot duplicate them.
   const seenStems = new Set<string>(reusedStems);
   const generated: QuizQuestion[] = [];
+  // Valid questions that duplicate the question bank: unusable here (the bank
+  // already has them), but they are exactly what a "retry with the same
+  // material" quiz needs when the model has nothing new to say.
+  const bankDuplicates: QuizQuestion[] = [];
   const difficulty = config.difficulty;
   for (const raw of rawQuestions) {
     try {
@@ -743,6 +899,10 @@ export async function generateQuizQuestions(
         difficulty,
         seenStems,
         existingHashes,
+        {
+          contexts: trimmedContexts,
+          onBankDuplicate: (duplicate) => bankDuplicates.push(duplicate),
+        },
       );
       if (question) {
         generated.push(question);
@@ -753,7 +913,23 @@ export async function generateQuizQuestions(
   }
 
   const planned = enforceTypePlan(generated, typePlan, remainingCount);
-  return [...reused, ...planned].slice(0, totalRequested);
+  const collected = [...reused, ...planned];
+
+  // Top up when the model produced too few *new* questions (e.g. the same
+  // material was quizzed before). Without this the user gets "no material" even
+  // though a perfectly good quiz exists.
+  if (collected.length < totalRequested) {
+    const collectedStems = new Set(collected.map((question) => stemHash(question.stem)));
+    for (const duplicate of bankDuplicates) {
+      if (collected.length >= totalRequested) break;
+      const hash = stemHash(duplicate.stem);
+      if (collectedStems.has(hash)) continue;
+      collectedStems.add(hash);
+      collected.push(duplicate);
+    }
+  }
+
+  return collected.slice(0, totalRequested);
 }
 
 /**

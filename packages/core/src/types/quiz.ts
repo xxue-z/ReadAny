@@ -49,7 +49,8 @@ export interface QuestionBankEntry {
   questionId: string;
   tags: string[];
   usageCount: number;
-  correctRate: number;
+  /** Rolling correct rate; `undefined` while the question has never been graded. */
+  correctRate?: number;
   variantOf?: string;
   createdAt: number;
   /** Joined from quiz_questions for the bank browsing UI. */
@@ -65,6 +66,8 @@ export interface QuizSummary {
   gradableCount: number;
   /** Questions waiting for manual grading (short_answer without a verdict). */
   pendingCount: number;
+  /** Questions that were never answered when the quiz was submitted. */
+  unansweredCount: number;
   correctCount: number;
   /** Correct / gradable — short-answer questions never deflate the score. */
   correctRate: number;

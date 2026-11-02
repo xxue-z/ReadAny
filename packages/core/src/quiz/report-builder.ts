@@ -42,6 +42,7 @@ export function computeSummary(
   // must never count as wrong in the score.
   const gradable = questions.filter((q) => q.type !== "short_answer");
   const pending = questions.filter((q) => q.type === "short_answer" && q.isCorrect === undefined);
+  const unansweredCount = questions.filter((q) => q.userAnswer === undefined).length;
   const gradableCount = gradable.length;
   const correctCount = gradable.filter((q) => q.isCorrect === true).length;
   const correctRate = gradableCount > 0 ? correctCount / gradableCount : 0;
@@ -67,6 +68,7 @@ export function computeSummary(
     totalQuestions,
     gradableCount,
     pendingCount: pending.length,
+    unansweredCount,
     correctCount,
     correctRate,
     timeSpent: session.timeSpent,
@@ -85,11 +87,16 @@ async function computeWeakAreas(questions: QuizQuestion[]): Promise<WeakArea[]> 
   const questionIds: string[] = [];
 
   for (const q of questions) {
-    // Short answers have no automatic verdict; they must not be counted as errors.
+    // Short answers have no automatic verdict; unanswered questions are not
+    // evidence of weakness either (skipping 5 questions must not flag their
+    // tags as 100% wrong).
     if (q.type === "short_answer") continue;
-    correctness.set(q.id, q.isCorrect ?? false);
+    if (q.isCorrect === undefined) continue;
+    correctness.set(q.id, q.isCorrect);
     questionIds.push(q.id);
   }
+
+  if (questionIds.length === 0) return [];
 
   const db = await getDB();
   const entries = await loadBankEntriesForQuestionIds(db, questionIds);
@@ -156,8 +163,15 @@ async function computeHistory(): Promise<HistoryTrend[]> {
   const sessions = await getQuizSessions(10);
   if (sessions.length === 0) return [];
 
+  // Only finished quizzes have a meaningful score; an abandoned session would
+  // otherwise be drawn as a 0% bar.
+  const finished = sessions.filter(
+    (session) => session.status === "graded" || session.status === "completed",
+  );
+  if (finished.length === 0) return [];
+
   // Load questions for every session in parallel
-  const trendPromises = sessions.map(async (s) => {
+  const trendPromises = finished.map(async (s) => {
     const questions = await getQuizQuestions(s.id);
     const gradable = questions.filter((q) => q.type !== "short_answer");
     const correct = gradable.filter((q) => q.isCorrect === true).length;

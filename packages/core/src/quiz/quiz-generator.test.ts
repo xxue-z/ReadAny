@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+﻿import { beforeEach, describe, expect, it } from "vitest";
 import { stemHash } from "../db/quiz-queries";
 import type { QuestionType, QuizConfig, QuizQuestion } from "../types";
 import { extractJson, tryParseAsQuestions, validateAndMapQuestion } from "./quiz-generator";
@@ -395,7 +395,7 @@ describe("quiz template configs", () => {
     expect(dailyConfig.type).toBe("daily");
     expect(dailyConfig.questionCount).toBe(10);
     expect(dailyConfig.timeRange).toBeDefined();
-    expect(dailyConfig.timeRange?.end - (dailyConfig.timeRange?.start ?? 0)).toBe(sevenDaysMs);
+    expect((dailyConfig.timeRange?.end ?? 0) - (dailyConfig.timeRange?.start ?? 0)).toBe(sevenDaysMs);
     expect(dailyConfig.difficulty).toBeGreaterThanOrEqual(1);
     expect(dailyConfig.difficulty).toBeLessThanOrEqual(2);
   });
@@ -416,7 +416,7 @@ describe("quiz template configs", () => {
     expect(monthlyConfig.type).toBe("monthly");
     expect(monthlyConfig.questionCount).toBe(50);
     expect(monthlyConfig.timeRange).toBeDefined();
-    expect(monthlyConfig.timeRange?.end - (monthlyConfig.timeRange?.start ?? 0)).toBe(thirtyDaysMs);
+    expect((monthlyConfig.timeRange?.end ?? 0) - (monthlyConfig.timeRange?.start ?? 0)).toBe(thirtyDaysMs);
     expect(monthlyConfig.difficulty).toBeGreaterThanOrEqual(1);
     expect(monthlyConfig.difficulty).toBeLessThanOrEqual(3);
   });
@@ -451,7 +451,11 @@ describe("quiz template configs", () => {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeQuestion(id: string, type: QuestionType, isCorrect: boolean): QuizQuestion {
+function makeQuestion(
+  id: string,
+  type: QuestionType,
+  isCorrect: boolean | undefined,
+): QuizQuestion {
   return {
     id,
     sessionId: "session-test",
