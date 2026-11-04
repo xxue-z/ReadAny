@@ -60,3 +60,4 @@ theme-studio/.claude/settings.local.json
 *.hbc  
 bundle-check.js  
 sqlite-split.js 
+.worktrees/

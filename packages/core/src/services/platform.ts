@@ -11,7 +11,40 @@ export interface FilePickerOptions {
     name: string;
     extensions: string[];
   }>;
+  /**
+   * Picker extensions are mapped to MIME types on mobile, and cold formats burst
+   * past the platform's type limit (iOS truncates, Android rejects). When set,
+   * the mobile picker asks for "*\/*" and the caller validates the extension
+   * itself after the user picks files.
+   */
+  allowAnyExtension?: boolean;
 }
+
+/** Extensions the app can import as books (TXT/UMD/MD are converted to EPUB). */
+export const BOOK_FILE_EXTENSIONS = [
+  "epub",
+  "pdf",
+  "mobi",
+  "azw",
+  "azw3",
+  "cbz",
+  "cbr",
+  "fb2",
+  "fbz",
+  "txt",
+  "umd",
+  "md",
+] as const;
+
+export function isSupportedBookExtension(fileNameOrPath: string): boolean {
+  const ext = fileNameOrPath.split(/[?#]/)[0]?.split(".").pop()?.toLowerCase() || "";
+  return (BOOK_FILE_EXTENSIONS as readonly string[]).includes(ext);
+}
+
+export const BOOK_FILE_PICKER_FILTER = {
+  name: "Books",
+  extensions: [...BOOK_FILE_EXTENSIONS],
+};
 
 export interface WebSocketOptions {
   headers?: Record<string, string>;

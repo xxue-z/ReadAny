@@ -25,7 +25,13 @@ export type {
   WebSocketOptions,
   UpdateInfo,
 } from "./services";
-export { setPlatformService, getPlatformService } from "./services";
+export {
+  setPlatformService,
+  getPlatformService,
+  BOOK_FILE_EXTENSIONS,
+  BOOK_FILE_PICKER_FILTER,
+  isSupportedBookExtension,
+} from "./services";
 
 // i18n
 export { default as i18n, initI18nLanguage, changeAndPersistLanguage } from "./i18n";
@@ -76,4 +82,8 @@ export type {
 export { readEpubChapterFromBookFile, readEpubChapterFromDraft } from "./epub/chapter";
 export type { EpubChapterReadResult } from "./epub/chapter";
 export { searchKnowledge } from "./knowledge/search";
-export type { KnowledgeSearchHit, KnowledgeSearchResult, KnowledgeSearchSource } from "./knowledge/search";
+export type {
+  KnowledgeSearchHit,
+  KnowledgeSearchResult,
+  KnowledgeSearchSource,
+} from "./knowledge/search";

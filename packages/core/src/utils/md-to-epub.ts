@@ -12,8 +12,15 @@ import { type ZipEntry, buildStoreOnlyZip } from "./store-only-zip";
 export interface Md2EpubOptions {
   /** Raw markdown source text. */
   markdown: string;
-  /** Optional book title override (otherwise derived from first H1 or "Untitled"). */
+  /**
+   * Optional book title override (otherwise derived from the first heading).
+   */
   title?: string;
+  /**
+   * Last-resort title when the document has no usable heading — typically the
+   * source file name. Keeps books called README.md from landing as "Untitled".
+   */
+  fallbackTitle?: string;
   /**
    * Local images referenced by the markdown, keyed by the (relative) src used in
    * the document — e.g. `{ "./images/a.png": bytes }`. Matching images are
@@ -193,25 +200,36 @@ function packageChapterImages(
 // ---------- chapter splitting ----------
 
 /**
- * Split markdown source into chapters on `#` / `##` boundaries.
+ * Closed-ATX heading that actually starts a chapter: `# Title`, `## Title ##`.
+ * The closing sequence needs a space before it, so `# C#` keeps its hash.
+ */
+const ATX_HEADING = /^(#{1,2})\s+(.+?)(?:\s+#+)?\s*$/;
+
+/** Fenced code block delimiter (``` or ~~~), including any info string. */
+const FENCE_LINE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
+
+interface MdSegment {
+  /** Heading text, or null for content before the first heading. */
+  title: string | null;
+  /** ATX level of `title` (1 or 2); 0 for the leading untitled segment. */
+  level: number;
+  lines: string[];
+}
+
+/**
+ * Split markdown into heading-delimited segments.
  *
  * Headings are detected line-wise *before* rendering, so regions where a `#` is
  * not a heading must be tracked explicitly: fenced code blocks (```` ``` ```` /
- * `~~~`), HTML comments and a leading YAML front-matter block. Otherwise a shell
- * comment such as `# install deps` inside a code fence would split the document
- * and shred the code block.
+ * `~~~`), HTML comments and a leading YAML front-matter block (dropped from the
+ * body, still kept in source.md). Otherwise a shell comment such as
+ * `# install deps` inside a code fence would split the document and shred the
+ * code block.
  */
-function splitChapters(markdown: string): MdChapter[] {
-  const trimmed = markdown.trim();
-  if (!trimmed) {
-    return [{ title: "Untitled", html: "" }];
-  }
-
-  const lines = trimmed.split(/\r?\n/);
-  const chapters: MdChapter[] = [];
-  let currentTitle = "";
-  let currentLines: string[] = [];
-  let hasAnyHeading = false;
+function splitSegments(markdown: string): MdSegment[] {
+  const lines = markdown.split(/\r?\n/);
+  const segments: MdSegment[] = [];
+  let current: MdSegment = { title: null, level: 0, lines: [] };
 
   // YAML front matter: drop it from the rendered body (still kept in source.md).
   // Require at least one `key: value` line so a document that merely starts with
@@ -230,75 +248,84 @@ function splitChapters(markdown: string): MdChapter[] {
   let fence: { marker: string; length: number } | null = null;
   let inComment = false;
 
-  const renderChapter = (chapterLines: string[]): string =>
-    marked.parse(chapterLines.join("\n"), { gfm: true }) as string;
-
   for (const [index, line] of lines.entries()) {
     if (index <= frontMatterEnd) continue;
 
-    const fenceMatch = line.match(/^\s{0,3}(`{3,}|~{3,})/);
+    const fenceMatch = line.match(FENCE_LINE);
 
     if (fence) {
-      currentLines.push(line);
+      current.lines.push(line);
+      // A closing fence uses the same character, is at least as long, and
+      // carries no info string (```` ```js ```` is content, not a closer).
       const closes =
-        fenceMatch &&
+        fenceMatch !== null &&
         fenceMatch[1]?.[0] === fence.marker &&
-        (fenceMatch[1]?.length ?? 0) >= fence.length;
+        (fenceMatch[1]?.length ?? 0) >= fence.length &&
+        (fenceMatch[2] ?? "").trim() === "";
       if (closes) fence = null;
       continue;
     }
 
     if (inComment) {
-      currentLines.push(line);
+      current.lines.push(line);
       if (line.includes("-->")) inComment = false;
       continue;
     }
 
     if (fenceMatch?.[1]) {
       fence = { marker: fenceMatch[1][0] as string, length: fenceMatch[1].length };
-      currentLines.push(line);
+      current.lines.push(line);
       continue;
     }
 
     if (/^\s{0,3}<!--/.test(line) && !line.includes("-->")) {
       inComment = true;
-      currentLines.push(line);
+      current.lines.push(line);
       continue;
     }
 
-    const h1Match = line.match(/^#\s+(.+)/);
-    const h2Match = line.match(/^##\s+(.+)/);
-
-    if (h1Match || h2Match) {
-      hasAnyHeading = true;
-      // Save previous chapter. Heading-only stubs (e.g. "# Title" directly
-      // followed by "## Part") are dropped: they would render as an empty page.
-      if (currentLines.length > 0 || currentTitle) {
-        const html = renderChapter(currentLines);
-        if (html.trim()) {
-          chapters.push({ title: currentTitle || "Untitled", html });
-        }
-      }
-      currentTitle = (h1Match?.[1] ?? h2Match?.[1] ?? "").trim();
-      currentLines = [];
-    } else {
-      currentLines.push(line);
+    const heading = line.match(ATX_HEADING);
+    if (heading?.[1] && heading[2]?.trim()) {
+      segments.push(current);
+      current = { title: heading[2].trim(), level: heading[1].length, lines: [] };
+      continue;
     }
+
+    current.lines.push(line);
   }
 
-  // Last chapter
-  const lastHtml = currentLines.join("\n").trim();
-  if (lastHtml || currentTitle) {
-    const html = renderChapter(currentLines);
-    // Keep a title-only document as a single (empty) chapter.
-    if (html.trim() || chapters.length === 0) {
-      chapters.push({ title: currentTitle || "Untitled", html });
-    }
+  segments.push(current);
+  return segments;
+}
+
+function renderChapter(lines: string[]): string {
+  return marked.parse(lines.join("\n"), { gfm: true }) as string;
+}
+
+/** Split markdown source into chapters on `#` / `##` boundaries. */
+function splitChapters(markdown: string): MdChapter[] {
+  const trimmed = markdown.trim();
+  if (!trimmed) {
+    return [{ title: "Untitled", html: "" }];
   }
+
+  const segments = splitSegments(trimmed);
+  const hasAnyHeading = segments.some((segment) => segment.title !== null);
 
   // No headings at all: treat as single chapter
   if (!hasAnyHeading) {
     return [{ title: "Untitled", html: marked.parse(trimmed, { gfm: true }) as string }];
+  }
+
+  const chapters: MdChapter[] = [];
+  for (const segment of segments) {
+    // A heading with nothing under it (e.g. "# Title" directly followed by
+    // "## Part") is a placeholder, not a chapter — it would render as a blank page.
+    if (segment.lines.join("\n").trim() === "") continue;
+    chapters.push({
+      title: segment.title ?? "Untitled",
+      html: renderChapter(segment.lines),
+    });
   }
 
   return chapters.length > 0 ? chapters : [{ title: "Untitled", html: "" }];
@@ -324,12 +351,34 @@ function detectLanguage(text: string): string {
   return cjkCount > latinCount * 0.5 ? "zh" : "en";
 }
 
-/** Derive book title: explicit override > first H1 > "Untitled". */
-function deriveBookTitle(markdown: string, explicit?: string): string {
+/**
+ * Derive book title, in priority order: explicit override > first ATX `# heading`
+ * > inline-HTML `<h1>` (how many READMEs center their title) > first `## heading`
+ * > caller-supplied fallback (usually the source file name).
+ *
+ * Headings inside fenced code are ignored — a `# Clone and setup` comment in a
+ * README snippet must not become the book title.
+ */
+function deriveBookTitle(markdown: string, explicit?: string, fallback?: string): string {
   if (explicit?.trim()) return explicit.trim();
-  const match = markdown.match(/^#\s+(.+)/m);
-  if (match?.[1]) return match[1].trim();
-  return "Untitled";
+
+  const headings = splitSegments(markdown).filter((segment) => segment.title?.trim());
+  const h1 = headings.find((segment) => segment.level === 1);
+  if (h1?.title) return h1.title.trim();
+
+  const htmlH1 = markdown.match(/<h1\b[^>]*>([\s\S]*?)<\/h1>/i);
+  if (htmlH1?.[1]) {
+    const text = htmlH1[1]
+      .replace(/<[^>]+>/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (text) return text;
+  }
+
+  const firstHeading = headings[0];
+  if (firstHeading?.title) return firstHeading.title.trim();
+
+  return fallback?.trim() || "Untitled";
 }
 
 // ---------- EPUB builders (mirrors umd-to-epub pattern) ----------
@@ -441,7 +490,7 @@ function simpleIdentifier(markdown: string): string {
 
 function buildEpubBytes(options: Md2EpubOptions): MdBytesConversionResult {
   const markdown = options.markdown;
-  const bookTitle = deriveBookTitle(markdown, options.title);
+  const bookTitle = deriveBookTitle(markdown, options.title, options.fallbackTitle);
   const lang = detectLanguage(markdown);
   const identifier = simpleIdentifier(markdown);
   const chapters = splitChapters(markdown);

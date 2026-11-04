@@ -480,7 +480,10 @@ async function restoreDeletedMobileBook(
     const text = new TextDecoder("utf-8").decode(sourceBytes);
     const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
     const converter = new MdToEpubConverter();
-    const conversion = converter.convertToBytes({ markdown: text });
+    const conversion = converter.convertToBytes({
+      markdown: text,
+      fallbackTitle: fileName.replace(/\.\w+$/i, ""),
+    });
 
     await ensureAppSubDir("books");
     const relativePath = `books/${bookId}.epub`;
@@ -692,7 +695,10 @@ async function inspectDeletedMobileBookCandidate(
       const text = new TextDecoder("utf-8").decode(sourceBytes);
       const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
       const converter = new MdToEpubConverter();
-      const conversion = converter.convertToBytes({ markdown: text });
+      const conversion = converter.convertToBytes({
+        markdown: text,
+        fallbackTitle: fileName.replace(/\.\w+$/i, ""),
+      });
       return {
         title: conversion.bookTitle || fileName.replace(/\.\w+$/i, "") || originalBook.meta.title,
         author: "",
@@ -709,7 +715,6 @@ async function inspectDeletedMobileBookCandidate(
       };
     }
   }
-
 
   let title = fileName.replace(/\.\w+$/i, "") || originalBook.meta.title || "Untitled";
   let author = "";
@@ -1221,7 +1226,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
               const text = new TextDecoder("utf-8").decode(sourceBytes);
               const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
               const converter = new MdToEpubConverter();
-              const conversion = converter.convertToBytes({ markdown: text });
+              const conversion = converter.convertToBytes({
+                markdown: text,
+                fallbackTitle: fileName.replace(/\.\w+$/i, ""),
+              });
 
               await ensureAppSubDir("books");
               const relativePath = `books/${bookId}.epub`;
@@ -1712,8 +1720,15 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         platform.readFile(await platform.joinPath(booksDir, relativePath)),
     });
 
+    const book = get().books.find((b) => b.id === bookId);
+
     const converter = new MdToEpubConverter();
-    const result = converter.convertToBytes({ markdown, assets });
+    const result = converter.convertToBytes({
+      markdown,
+      assets,
+      // Deleting every heading must not rename the book to "Untitled".
+      fallbackTitle: book?.meta.title,
+    });
     const relativeEpub = `books/${bookId}.epub`;
     const relativeMd = `books/${bookId}.md`;
     const epubPath = await resolveAppPath(relativeEpub);
@@ -1722,7 +1737,6 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     await platform.writeFile(epubPath, result.epubBytes);
     await platform.writeFile(mdPath, encoder.encode(markdown));
 
-    const book = get().books.find((b) => b.id === bookId);
     if (!book) return;
 
     const titleChanged = result.bookTitle !== book.meta.title;

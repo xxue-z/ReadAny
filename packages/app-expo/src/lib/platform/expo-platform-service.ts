@@ -125,7 +125,7 @@ export class ExpoPlatformService implements IPlatformService {
     try {
       // Convert extension-based filters to MIME types for expo-document-picker
       const mimeTypes: string[] = [];
-      if (options?.filters) {
+      if (options?.filters && !options.allowAnyExtension) {
         for (const filter of options.filters) {
           for (const ext of filter.extensions) {
             const mime = extensionToMime(ext);

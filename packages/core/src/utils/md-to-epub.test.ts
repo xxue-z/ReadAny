@@ -155,7 +155,86 @@ describe("MdToEpubConverter", () => {
       const result = converter.convertToBytes({
         markdown: "## Only H2 here\n\nContent.",
       });
+      expect(result.bookTitle).toBe("Only H2 here");
+    });
+
+    it('falls back to "Untitled" when there is no heading at all', () => {
+      const result = converter.convertToBytes({
+        markdown: "Just prose, no headings anywhere.",
+      });
       expect(result.bookTitle).toBe("Untitled");
+    });
+
+    it("uses an inline-HTML H1 when there is no ATX heading", () => {
+      const result = converter.convertToBytes({
+        markdown:
+          '<p align="center">\n  <img src="logo.svg">\n</p>\n\n<h1 align="center">ReadAny</h1>\n\nBody.',
+      });
+      expect(result.bookTitle).toBe("ReadAny");
+    });
+
+    it("prefers the H1 over an earlier H2", () => {
+      const result = converter.convertToBytes({
+        markdown: "## Sub Section\n\nBody.\n\n# Real Title\n\nMore.",
+      });
+      expect(result.bookTitle).toBe("Real Title");
+    });
+
+    it("uses the fallback title (usually the file name) when nothing else is available", () => {
+      const result = converter.convertToBytes({
+        markdown: "Plain prose only.",
+        fallbackTitle: "README",
+      });
+      expect(result.bookTitle).toBe("README");
+    });
+
+    it("ignores heading-looking lines inside fenced code blocks", () => {
+      // A bash comment in a README snippet must not become the book title.
+      const result = converter.convertToBytes({
+        markdown: "# Real Book\n\nIntro.\n\n```bash\n# Clone and setup\ngit clone x\n```\n",
+        fallbackTitle: "README",
+      });
+      expect(result.bookTitle).toBe("Real Book");
+    });
+  });
+
+  describe("code fence handling", () => {
+    it("does not split chapters on # comments inside fenced code", () => {
+      const result = converter.convertToBytes({
+        markdown:
+          "# Setup\n\n```bash\n# Clone and setup\ngit clone x\n# Install\nyarn\n```\n\n## Next\n\nBody.",
+      });
+      expect(result.chapterCount).toBe(2);
+      const setup = entryText(result.epubBytes, "OEBPS/chapter1.xhtml");
+      expect(setup).toContain("# Clone and setup");
+      expect(setup).toContain("<pre>");
+    });
+
+    it("treats a titled fence as a code block, not a heading", () => {
+      const result = converter.convertToBytes({
+        markdown: "```sh\n# not a title\n```\n\n# Actual Title\n\nBody.",
+        fallbackTitle: "file",
+      });
+      expect(result.bookTitle).toBe("Actual Title");
+    });
+
+    it("treats ~~~ fences the same way", () => {
+      const result = converter.convertToBytes({
+        markdown: "# Book\n\n~~~bash\n# comment\n~~~\n",
+      });
+      expect(result.bookTitle).toBe("Book");
+      expect(result.chapterCount).toBe(1);
+    });
+
+    it("resumes heading detection after a fence closes", () => {
+      const result = converter.convertToBytes({
+        markdown: "```bash\n# inside\n```\n\n## Outside\n\nBody.",
+      });
+      // The leading code block is its own untitled chapter; "Outside" still gets one.
+      expect(result.chapterCount).toBe(2);
+      const outside = entryText(result.epubBytes, "OEBPS/chapter2.xhtml");
+      expect(outside).toContain("Outside");
+      expect(entryText(result.epubBytes, "OEBPS/chapter1.xhtml")).toContain("# inside");
     });
   });
 

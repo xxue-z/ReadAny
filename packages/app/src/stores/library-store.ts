@@ -471,26 +471,29 @@ async function restoreDeletedDesktopBook(bookId: string, filePath: string): Prom
             return { relativePath: relPath, destPath: dest };
           })()
         : ext === "md"
-        ? await (async () => {
-            const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
-            const { readFile, writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
-            const { join } = await import("@tauri-apps/api/path");
-            const rawBytes = await readFile(filePath);
-            const decoder = new TextDecoder();
-            const markdown = decoder.decode(rawBytes);
-            const converter = new MdToEpubConverter();
-            const conversion = converter.convertToBytes({ markdown });
-            title = conversion.bookTitle || title;
-            await mkdir(await join(await getDesktopLibraryRoot(), "books"), { recursive: true });
-            const relPath = `books/${bookId}.epub`;
-            const dest = await resolveAppPath(relPath);
-            await writeFile(dest, conversion.epubBytes);
-            // Save source MD for future re-editing
-            const mdPath = await resolveAppPath(`books/${bookId}.md`);
-            await writeFile(mdPath, rawBytes);
-            return { relativePath: relPath, destPath: dest };
-          })()
-        : await copyBookToAppData(bookId, ext, filePath);
+          ? await (async () => {
+              const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
+              const { readFile, writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
+              const { join } = await import("@tauri-apps/api/path");
+              const rawBytes = await readFile(filePath);
+              const decoder = new TextDecoder();
+              const markdown = decoder.decode(rawBytes);
+              const converter = new MdToEpubConverter();
+              const conversion = converter.convertToBytes({
+                markdown,
+                fallbackTitle: fileName.replace(/\.\w+$/i, ""),
+              });
+              title = conversion.bookTitle || title;
+              await mkdir(await join(await getDesktopLibraryRoot(), "books"), { recursive: true });
+              const relPath = `books/${bookId}.epub`;
+              const dest = await resolveAppPath(relPath);
+              await writeFile(dest, conversion.epubBytes);
+              // Save source MD for future re-editing
+              const mdPath = await resolveAppPath(`books/${bookId}.md`);
+              await writeFile(mdPath, rawBytes);
+              return { relativePath: relPath, destPath: dest };
+            })()
+          : await copyBookToAppData(bookId, ext, filePath);
 
   // Extract metadata using lightweight approach (avoids full file load for EPUB/PDF)
   try {
@@ -516,7 +519,9 @@ async function restoreDeletedDesktopBook(bookId: string, filePath: string): Prom
       const fileBytes = await readFile(destPath);
       const blob = new Blob([fileBytes]);
       const effectiveFileName =
-        ext === "txt" || ext === "umd" || ext === "md" ? fileName.replace(/\.\w+$/i, ".epub") : fileName;
+        ext === "txt" || ext === "umd" || ext === "md"
+          ? fileName.replace(/\.\w+$/i, ".epub")
+          : fileName;
       const file = new File([blob], effectiveFileName, {
         type: blob.type || "application/octet-stream",
       });
@@ -669,7 +674,10 @@ async function inspectDeletedDesktopBookCandidate(
       const rawBytes = await readFile(filePath);
       const decoder = new TextDecoder();
       const markdown = decoder.decode(rawBytes);
-      const conversion = new MdToEpubConverter().convertToBytes({ markdown });
+      const conversion = new MdToEpubConverter().convertToBytes({
+        markdown,
+        fallbackTitle: fileName.replace(/\.\w+$/i, ""),
+      });
       title = conversion.bookTitle || title;
     } catch (err) {
       console.warn("[Library] MD title extraction failed:", err);
@@ -743,8 +751,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
           isLoaded: true,
           allTags: computeTags(cached),
           activeGroupId: keepActiveGroupId(state.activeGroupId, groups),
-        
-}));
+        }));
       }
     } catch (err) {
       console.warn("[Library] Failed to load cached books:", err);
@@ -953,11 +960,17 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
           }
 
           let deletedMatch = fileHash
-            ? await db.getDeletedBookByFileHash(fileHash).catch((err) => { console.warn("[Library] Failed to check deleted book by hash:", err); return null; })
+            ? await db.getDeletedBookByFileHash(fileHash).catch((err) => {
+                console.warn("[Library] Failed to check deleted book by hash:", err);
+                return null;
+              })
             : null;
           // Fallback: match by title if hash lookup failed (e.g. hash was null on first import)
           if (!deletedMatch && title) {
-            deletedMatch = await db.getDeletedBookByTitle(title).catch((err) => { console.warn("[Library] Failed to check deleted book by title:", err); return null; });
+            deletedMatch = await db.getDeletedBookByTitle(title).catch((err) => {
+              console.warn("[Library] Failed to check deleted book by title:", err);
+              return null;
+            });
           }
           const bookId = deletedMatch?.id ?? crypto.randomUUID();
 
@@ -1049,7 +1062,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
             });
 
             const converter = new MdToEpubConverter();
-            const mdResult = converter.convertToBytes({ markdown, assets });
+            const mdResult = converter.convertToBytes({
+              markdown,
+              assets,
+              fallbackTitle: fileName.replace(/\.\w+$/i, ""),
+            });
             if (mdResult.bookTitle) title = mdResult.bookTitle;
             await mkdir(booksDir, { recursive: true });
             const destEpub = await resolveAppPath(`books/${bookId}.epub`);
@@ -1209,9 +1226,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
           ) {
             triggerVectorizeBook(book.id, relativePath, (progress) => {
               // Update book's vectorizeProgress so BookCard can show it
-              const pct = progress.totalChunks > 0
-                ? progress.processedChunks / progress.totalChunks
-                : 0;
+              const pct =
+                progress.totalChunks > 0 ? progress.processedChunks / progress.totalChunks : 0;
               get().updateBook(book.id, { vectorizeProgress: pct });
             }).catch((err) => {
               console.warn(`[importBooks] Auto-vectorize failed for ${title}:`, err);
@@ -1391,7 +1407,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     // Persist book tag changes to DB
     const books = get().books;
     for (const b of books) {
-      db.updateBook(b.id, { tags: b.tags }).catch((err) => console.warn("[Library] Failed to update book tags:", err));
+      db.updateBook(b.id, { tags: b.tags }).catch((err) =>
+        console.warn("[Library] Failed to update book tags:", err),
+      );
     }
   },
 
@@ -1411,7 +1429,9 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     });
     for (const b of get().books) {
       if (b.tags.includes(trimmed)) {
-        db.updateBook(b.id, { tags: b.tags }).catch((err) => console.warn("[Library] Failed to update book tags:", err));
+        db.updateBook(b.id, { tags: b.tags }).catch((err) =>
+          console.warn("[Library] Failed to update book tags:", err),
+        );
       }
     }
   },
@@ -1428,7 +1448,10 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       return { books, allTags };
     });
     const book = get().books.find((b) => b.id === bookId);
-    if (book) db.updateBook(bookId, { tags: book.tags }).catch((err) => console.warn("[Library] Failed to update book tags:", err));
+    if (book)
+      db.updateBook(bookId, { tags: book.tags }).catch((err) =>
+        console.warn("[Library] Failed to update book tags:", err),
+      );
   },
 
   removeTagFromBook: (bookId, tag) => {
@@ -1440,22 +1463,25 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       return { books };
     });
     const book = get().books.find((b) => b.id === bookId);
-    if (book) db.updateBook(bookId, { tags: book.tags }).catch((err) => console.warn("[Library] Failed to update book tags:", err));
+    if (book)
+      db.updateBook(bookId, { tags: book.tags }).catch((err) =>
+        console.warn("[Library] Failed to update book tags:", err),
+      );
   },
 
   createDocument: async (title) => {
     const bookId = crypto.randomUUID();
-    const markdown = title?.trim() ? '# ' + title.trim() : '# Untitled';
-    const { MdToEpubConverter } = await import('@readany/core/utils/md-to-epub');
+    const markdown = title?.trim() ? "# " + title.trim() : "# Untitled";
+    const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
     const converter = new MdToEpubConverter();
     const result = converter.convertToBytes({ markdown, title: title?.trim() || undefined });
     const encoder = new TextEncoder();
-    const { writeFile, mkdir } = await import('@tauri-apps/plugin-fs');
-    const { join } = await import('@tauri-apps/api/path');
-    const root = await (await import('@/lib/storage/desktop-library-root')).getDesktopLibraryRoot();
-    await mkdir(await join(root, 'books'), { recursive: true });
-    const epubPath = await resolveAppPath('books/' + bookId + '.epub');
-    const mdPath = await resolveAppPath('books/' + bookId + '.md');
+    const { writeFile, mkdir } = await import("@tauri-apps/plugin-fs");
+    const { join } = await import("@tauri-apps/api/path");
+    const root = await (await import("@/lib/storage/desktop-library-root")).getDesktopLibraryRoot();
+    await mkdir(await join(root, "books"), { recursive: true });
+    const epubPath = await resolveAppPath("books/" + bookId + ".epub");
+    const mdPath = await resolveAppPath("books/" + bookId + ".md");
     await writeFile(epubPath, result.epubBytes);
     await writeFile(mdPath, encoder.encode(markdown));
     const book: Book = {
@@ -1495,15 +1521,21 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       readAsset: async (relativePath) => readFile(await join(booksDir, relativePath)),
     });
 
+    const book = get().books.find((b) => b.id === bookId);
+
     const converter = new MdToEpubConverter();
-    const result = converter.convertToBytes({ markdown, assets });
+    const result = converter.convertToBytes({
+      markdown,
+      assets,
+      // Deleting every heading must not rename the book to "Untitled".
+      fallbackTitle: book?.meta.title,
+    });
     const encoder = new TextEncoder();
     const epubPath = await resolveDesktopDataPath(`books/${bookId}.epub`);
     const mdPath = await resolveDesktopDataPath(`books/${bookId}.md`);
     await writeFile(epubPath, result.epubBytes);
     await writeFile(mdPath, encoder.encode(markdown));
 
-    const book = get().books.find((b) => b.id === bookId);
     if (!book) return;
 
     const titleChanged = result.bookTitle !== book.meta.title;
@@ -1522,13 +1554,11 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
 
     if (wasVectorized && book.filePath) {
       triggerVectorizeBook(bookId, book.filePath, (progress) => {
-        const pct =
-          progress.totalChunks > 0 ? progress.processedChunks / progress.totalChunks : 0;
+        const pct = progress.totalChunks > 0 ? progress.processedChunks / progress.totalChunks : 0;
         get().updateBook(bookId, { vectorizeProgress: pct });
       })
         .then(() => get().updateBook(bookId, { isVectorized: true, vectorizeProgress: 1 }))
         .catch((err) => console.warn("[Library] Re-vectorize after save failed:", err));
     }
   },
-
 }));

@@ -42,6 +42,7 @@ import {
   DEFAULT_WEBDAV_IMPORT_REMOTE_ROOT,
   type WebDavImportSource,
   getPlatformService,
+  isSupportedBookExtension,
 } from "@readany/core";
 import { setFallbackContentProvider } from "@readany/core/ai";
 import { onLibraryChanged } from "@readany/core/events/library-events";
@@ -251,7 +252,6 @@ export function LibraryScreen() {
     });
   }, [searchAnim, setFilter]);
 
-
   useEffect(() => {
     loadBooks();
   }, [loadBooks]);
@@ -396,25 +396,45 @@ export function LibraryScreen() {
     if (localImportInFlightRef.current) return;
     localImportInFlightRef.current = true;
     setIsPickingImport(true);
+    let result: DocumentPicker.DocumentPickerResult | null = null;
 
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: [
-          "application/epub+zip",
-          "application/pdf",
-          "application/x-mobipocket-ebook",
-          "application/vnd.amazon.ebook",
-          "application/vnd.comicbook+zip",
-          "application/x-fictionbook+xml",
-          "text/plain",
-          "application/octet-stream",
-        ],
+      // Ask for "*/*" instead of a MIME whitelist: `.md` maps to text/markdown,
+      // which older pickers report as text/plain or octet-stream, and long
+      // MIME lists get truncated by iOS / rejected by Android. Supported
+      // extensions are validated below instead.
+      result = await DocumentPicker.getDocumentAsync({
+        type: ["*/*"],
         multiple: true,
         copyToCacheDirectory: true,
       });
-      if (result.canceled || !result.assets || result.assets.length === 0) return;
-      const files = result.assets.map((a) => ({ uri: a.uri, name: a.name }));
-      const summary = await importBooks(files);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("Different document picking in progress")) {
+        console.error("Import failed:", err);
+      }
+    } finally {
+      localImportInFlightRef.current = false;
+      setIsPickingImport(false);
+    }
+
+    if (!result || result.canceled || !result.assets || result.assets.length === 0) return;
+
+    const files = result.assets.map((a) => ({ uri: a.uri, name: a.name }));
+    const supported = files.filter((file) => isSupportedBookExtension(file.name || file.uri));
+    if (supported.length === 0) {
+      Alert.alert(
+        t("library.importUnsupportedTitle", "不支持的文件类型"),
+        t(
+          "library.importUnsupportedMessage",
+          "请选择 EPUB、PDF、MOBI、AZW3、CBZ、FB2、TXT、UMD 或 Markdown（.md）文件。",
+        ),
+      );
+      return;
+    }
+
+    try {
+      const summary = await importBooks(supported);
       Alert.alert(
         t("common.success", "成功！"),
         t("library.importResultSummary", {
@@ -424,13 +444,7 @@ export function LibraryScreen() {
         }),
       );
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("Different document picking in progress")) {
-        console.error("Import failed:", err);
-      }
-    } finally {
-      localImportInFlightRef.current = false;
-      setIsPickingImport(false);
+      console.error("Import failed:", err);
     }
   }, [importBooks, t]);
 
@@ -1168,11 +1182,11 @@ export function LibraryScreen() {
         anchor={sourceSheetAnchor}
         localImportBusy={isPickingImport}
         onCreateDocument={async () => {
-              setSourceSheetOpen(false);
-              const book = await createDocument();
-              if (book) nav.navigate("DocumentEditor", { bookId: book.id });
-            }}
-            onClose={() => setSourceSheetOpen(false)}
+          setSourceSheetOpen(false);
+          const book = await createDocument();
+          if (book) nav.navigate("DocumentEditor", { bookId: book.id });
+        }}
+        onClose={() => setSourceSheetOpen(false)}
         onDismiss={handleSourceSheetDismiss}
         onPickLocal={handlePickLocalFromSourceMenu}
         onPickSavedWebDav={() => void handleOpenSavedWebDav()}
