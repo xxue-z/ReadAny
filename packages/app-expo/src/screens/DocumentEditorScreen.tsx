@@ -30,149 +30,74 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
+import Markdown from "react-native-marked";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type DocumentEditorRoute = RouteProp<RootStackParamList, "DocumentEditor">;
 
-// Simple Markdown preview component (lightweight, no external dep needed for basic rendering)
-type PreviewBlock =
-  | { key: string; index: number; kind: "heading"; level: 1 | 2 | 3; text: string }
-  | { key: string; index: number; kind: "bullet" | "quote"; text: string }
-  | { key: string; index: number; kind: "bold" | "paragraph"; text: string }
-  | { key: string; index: number; kind: "spacer" };
-
 /**
- * Build render blocks with keys derived from the line content (plus an
- * occurrence suffix), so React keeps the right node when a line is inserted or
- * removed while editing. Array indexes cannot be used as keys for that reason.
+ * Markdown preview for the reading mode, powered by react-native-marked
+ * (marked.js under the hood — the same parser as the md→epub converter).
+ * Renders the full GFM surface (tables, task lists, fenced code, images)
+ * instead of showing raw source for anything the old hand-rolled renderer
+ * did not recognise.
  */
-function buildPreviewBlocks(content: string): PreviewBlock[] {
-  const occurrences = new Map<string, number>();
-  const nextKey = (line: string) => {
-    const base = line.trim() || "__blank__";
-    const count = occurrences.get(base) ?? 0;
-    occurrences.set(base, count + 1);
-    return `${base}#${count}`;
-  };
-
-  return content.split("\n").map((line, index): PreviewBlock => {
-    const key = nextKey(line);
-    if (line.startsWith("# ")) {
-      return { key, index, kind: "heading", level: 1, text: line.slice(2) };
-    }
-    if (line.startsWith("## ")) {
-      return { key, index, kind: "heading", level: 2, text: line.slice(3) };
-    }
-    if (line.startsWith("### ")) {
-      return { key, index, kind: "heading", level: 3, text: line.slice(4) };
-    }
-    if (line.startsWith("- ")) {
-      return { key, index, kind: "bullet", text: line.slice(2) };
-    }
-    if (line.startsWith("> ")) {
-      return { key, index, kind: "quote", text: line.slice(2) };
-    }
-    if (/^\*\*.*\*\*$/.test(line)) {
-      return { key, index, kind: "bold", text: line.replace(/^\*\*/, "").replace(/\*\*$/, "") };
-    }
-    if (line.trim() === "") {
-      return { key, index, kind: "spacer" };
-    }
-    return { key, index, kind: "paragraph", text: line };
-  });
-}
-
 function MarkdownPreview({ content, colors }: { content: string; colors: ThemeColors }) {
-  const blocks = useMemo(() => buildPreviewBlocks(content), [content]);
-
   return (
-    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16 }}>
-      {blocks.map((block) => {
-        switch (block.kind) {
-          case "heading": {
-            const style =
-              block.level === 1
-                ? {
-                    fontSize: 24,
-                    fontWeight: "700" as const,
-                    marginBottom: 12,
-                    marginTop: block.index > 0 ? 20 : 0,
-                  }
-                : block.level === 2
-                  ? { fontSize: 20, fontWeight: "600" as const, marginBottom: 10, marginTop: 16 }
-                  : { fontSize: 17, fontWeight: "600" as const, marginBottom: 8, marginTop: 12 };
-            return (
-              <Text key={block.key} style={{ ...style, color: colors.foreground }}>
-                {block.text}
-              </Text>
-            );
-          }
-          case "bullet":
-            return (
-              <View
-                key={block.key}
-                style={{ flexDirection: "row", paddingLeft: 12, marginBottom: 4 }}
-              >
-                <Text style={{ color: colors.mutedForeground, marginRight: 6 }}>{"\u2022"}</Text>
-                <Text style={{ flex: 1, fontSize: 15, lineHeight: 22, color: colors.foreground }}>
-                  {block.text}
-                </Text>
-              </View>
-            );
-          case "quote":
-            return (
-              <View
-                key={block.key}
-                style={{
-                  borderLeftWidth: 3,
-                  borderLeftColor: colors.border,
-                  paddingLeft: 10,
-                  marginBottom: 6,
-                  paddingVertical: 4,
-                }}
-              >
-                <Text style={{ fontSize: 14, fontStyle: "italic", color: colors.mutedForeground }}>
-                  {block.text}
-                </Text>
-              </View>
-            );
-          case "bold":
-            return (
-              <Text
-                key={block.key}
-                style={{
-                  fontSize: 15,
-                  fontWeight: "700",
-                  lineHeight: 22,
-                  color: colors.foreground,
-                  marginBottom: 4,
-                }}
-              >
-                {block.text}
-              </Text>
-            );
-          case "spacer":
-            return <View key={block.key} style={{ height: 10 }} />;
-          default:
-            return (
-              <Text
-                key={block.key}
-                style={{
-                  fontSize: 15,
-                  lineHeight: 22,
-                  color: colors.foreground,
-                  marginBottom: 4,
-                }}
-              >
-                {block.text}
-              </Text>
-            );
-        }
-      })}
-    </ScrollView>
+    <Markdown
+      value={content}
+      selectable
+      theme={{
+        colors: {
+          code: colors.muted,
+          link: colors.indigo,
+          text: colors.foreground,
+          border: colors.border,
+        },
+        spacing: { xs: 2, s: 4, m: 8, l: 16 },
+      }}
+      styles={{
+        h1: { fontSize: 24, fontWeight: "700", color: colors.foreground, marginBottom: 12, marginTop: 20 },
+        h2: { fontSize: 20, fontWeight: "700", color: colors.foreground, marginBottom: 10, marginTop: 18 },
+        h3: { fontSize: 17, fontWeight: "600", color: colors.foreground, marginBottom: 8, marginTop: 14 },
+        h4: { fontSize: 16, fontWeight: "600", color: colors.foreground, marginBottom: 8, marginTop: 12 },
+        h5: { fontSize: 15, fontWeight: "600", color: colors.foreground, marginBottom: 6, marginTop: 12 },
+        h6: { fontSize: 14, fontWeight: "600", color: colors.foreground, marginBottom: 6, marginTop: 12 },
+        paragraph: { marginBottom: 8 },
+        text: { fontSize: 15, lineHeight: 22, color: colors.foreground },
+        strong: { fontWeight: "700" },
+        strikethrough: { textDecorationLine: "line-through" },
+        codespan: {
+          backgroundColor: colors.muted,
+          color: colors.foreground,
+          fontSize: 13,
+          borderRadius: 4,
+          paddingHorizontal: 4,
+          paddingVertical: 1,
+        },
+        code: { backgroundColor: colors.muted, borderRadius: 8, padding: 12, marginBottom: 8 },
+        codeText: {
+          color: colors.foreground,
+          fontSize: 13,
+          lineHeight: 18,
+          fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
+        },
+        blockquote: { borderLeftWidth: 3, borderLeftColor: colors.border, paddingLeft: 12, marginBottom: 8 },
+        link: { color: colors.primary, textDecorationLine: "underline" },
+        hr: { backgroundColor: colors.border, marginVertical: 12 },
+        list: { marginBottom: 8 },
+        li: { fontSize: 15, lineHeight: 22, color: colors.foreground },
+        table: { borderWidth: 1, borderColor: colors.border, borderRadius: 6, overflow: "hidden", marginBottom: 8 },
+        tableRow: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
+        tableCell: { paddingVertical: 6, paddingHorizontal: 10 },
+        image: { borderRadius: 8, marginVertical: 8 },
+      }}
+      flatListProps={{ contentContainerStyle: { padding: 16 } }}
+    />
   );
 }
+
 
 // Helper: find the book dir path and md path from a book
 function getMdPath(bookId: string): Promise<string> {
