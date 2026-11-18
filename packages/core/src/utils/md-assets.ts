@@ -33,6 +33,43 @@ export function isLocalImageSource(src: string): boolean {
   return !normalized.split("/").includes("..");
 }
 
+/**
+ * Rewrite only the `src` inside image tokens (`![](...)` / `<img ...>`), leaving
+ * prose, code blocks and longer paths that merely contain the src untouched.
+ * `replacements` maps an image src to its persisted copy.
+ */
+const IMAGE_TOKEN_SRC_PATTERN =
+  /!\[[^\]]*\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)|<img[^>]+src=["']([^"']+)["'][^>]*>/g;
+
+function rewriteImageSources(
+  markdown: string,
+  replacements: ReadonlyMap<string, string>,
+): string {
+  if (replacements.size === 0) return markdown;
+
+  const edits: { start: number; end: number; text: string }[] = [];
+  for (const match of markdown.matchAll(IMAGE_TOKEN_SRC_PATTERN)) {
+    const src = match[1] || match[2];
+    const next = src ? replacements.get(src) : undefined;
+    if (!src || !next) continue;
+    const index = match.index ?? 0;
+    // Locate the src inside the token. lastIndexOf favours the url/attribute
+    // position when the alt text happens to contain the same string.
+    const local = match[0].lastIndexOf(src);
+    if (local === -1) continue;
+    edits.push({ start: index + local, end: index + local + src.length, text: next });
+  }
+  if (edits.length === 0) return markdown;
+
+  // Apply right-to-left so earlier indices remain valid.
+  edits.sort((a, b) => b.start - a.start);
+  let result = markdown;
+  for (const edit of edits) {
+    result = result.slice(0, edit.start) + edit.text + result.slice(edit.end);
+  }
+  return result;
+}
+
 export interface CollectMarkdownAssetsOptions {
   markdown: string;
   /** Read a path relative to the document. Rejections mean "image not found". */
@@ -67,7 +104,7 @@ export async function collectMarkdownAssets(
 ): Promise<CollectMarkdownAssetsResult> {
   const { markdown, readAsset, persistAsset, assetPrefix } = options;
   const assets: Record<string, Uint8Array> = {};
-  let rewritten = markdown;
+  const replacements = new Map<string, string>();
 
   for (const src of extractMarkdownImageSources(markdown)) {
     if (!isLocalImageSource(src)) continue;
@@ -91,7 +128,7 @@ export async function collectMarkdownAssets(
       const newSrc = await persistAsset(fileName, bytes);
       assets[newSrc] = bytes;
       if (newSrc !== src) {
-        rewritten = rewritten.split(src).join(newSrc);
+        replacements.set(src, newSrc);
       }
     } catch (err) {
       console.warn("[MD assets] Failed to persist image:", src, err);
@@ -99,5 +136,5 @@ export async function collectMarkdownAssets(
     }
   }
 
-  return { markdown: rewritten, assets };
+  return { markdown: rewriteImageSources(markdown, replacements), assets };
 }
