@@ -550,7 +550,17 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
 
   // Track which highlights have been rendered (id -> {cfi, note, color, isPdf?, pdfPageIndex?}) to detect changes
   const renderedHighlightsRef = useRef<
-    Map<string, { cfi: string; hasNote: boolean; color?: HighlightColor; isPdf?: boolean; pdfPageIndex?: number }>
+    Map<
+      string,
+      {
+        cfi: string;
+        hasNote: boolean;
+        color?: HighlightColor;
+        isPdf?: boolean;
+        pdfPageIndex?: number;
+        quadKey?: string;
+      }
+    >
   >(new Map());
 
   // Reset rendered highlights tracking when book changes
@@ -725,8 +735,12 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
             })()
           : undefined;
 
-        // Check if we need to re-render (new highlight, note status changed, or color changed)
-        const needsRender = !existing || existing.hasNote !== hasNote || existing.color !== color;
+        const quadKey = isPdf ? JSON.stringify(h.quadPoints ?? []) : undefined;
+
+        // Check if we need to re-render (new highlight, note status changed, color
+        // changed, or PDF geometry changed)
+        const needsRender =
+          !existing || existing.hasNote !== hasNote || existing.color !== color || existing.quadKey !== quadKey;
 
         if (needsRender) {
           // Remove old annotation if exists
@@ -755,6 +769,7 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
             color,
             isPdf,
             pdfPageIndex,
+            quadKey: h.quadPoints ? JSON.stringify(h.quadPoints) : undefined,
           });
         }
       }
@@ -1438,6 +1453,7 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
               hasNote: !!h.note,
               color: h.color || "yellow",
               isPdf,
+              quadKey: h.quadPoints ? JSON.stringify(h.quadPoints) : undefined,
               pdfPageIndex: isPdf
                 ? (() => {
                     const match = h.cfi?.match(/\/6\/(\d+)/);
@@ -1684,6 +1700,7 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
           color,
           isPdf,
           pdfPageIndex: selection.pdfPageIndex,
+          quadKey: isPdf ? JSON.stringify(selection.quads ?? []) : undefined,
         });
       }
       setSelection(null);
