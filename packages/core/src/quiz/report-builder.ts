@@ -174,17 +174,22 @@ async function computeHistory(): Promise<HistoryTrend[]> {
   const trendPromises = finished.map(async (s) => {
     const questions = await getQuizQuestions(s.id);
     const gradable = questions.filter((q) => q.type !== "short_answer");
+    // A session with nothing auto-graded (e.g. all short answers) has no
+    // meaningful score — skip it instead of drawing a fabricated 0% bar.
+    if (gradable.length === 0) return null;
     const correct = gradable.filter((q) => q.isCorrect === true).length;
 
     return {
       sessionId: s.id,
       date: s.createdAt,
       score: s.score ?? 0,
-      correctRate: gradable.length > 0 ? correct / gradable.length : 0,
+      correctRate: correct / gradable.length,
     } satisfies HistoryTrend;
   });
 
-  const trends = await Promise.all(trendPromises);
+  const trends = (await Promise.all(trendPromises)).filter(
+    (trend): trend is HistoryTrend => trend !== null,
+  );
 
   // Most-recent-first is already the order from getQuizSessions; reverse for
   // chronological display.

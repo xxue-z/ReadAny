@@ -419,6 +419,10 @@ export async function updateQuestionBankStats(questions: QuizQuestion[]): Promis
   const database = await getDB();
 
   for (const question of questions) {
+    // A question that was never answered is not evidence of use: skip it so it
+    // cannot inflate usage_count or dilute the rolling correct-rate average.
+    if (question.userAnswer === undefined) continue;
+
     // Bank entries reference the *original* question row; a question re-used in
     // a new session is a clone with a fresh id, so fall back to the stem.
     const rows = await database.select<{

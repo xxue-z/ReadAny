@@ -137,4 +137,14 @@ describe("buildQuizReport", () => {
     const report = await buildQuizReport("s1");
     expect(report.history.map((entry) => entry.sessionId)).toEqual(["s1"]);
   });
+
+  it("keeps short-answer-only sessions out of the history trend", async () => {
+    h.questions = [
+      question({ id: "q1", type: "short_answer", options: undefined, userAnswer: "mine" }),
+    ];
+    h.bankRows = [];
+
+    const report = await buildQuizReport("s1");
+    expect(report.history).toEqual([]);
+  });
 });
