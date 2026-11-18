@@ -1165,6 +1165,28 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
     // Remember painted PDF highlights so they can be re-painted after pdf.js
     // replaces the text layer on zoom / resize.
     const pdfDrawnHighlightsRef = useRef<Map<string, PdfDrawnHighlight>>(new Map());
+
+    /** Re-paint only the highlights that belong to the given page document. */
+    const repaintPdfHighlightsForDoc = useCallback((doc: Document) => {
+      const pageIndex = pdfDocIndexRef.current.get(doc);
+      const view = viewRef.current;
+      if (pageIndex === undefined || !view) return;
+
+      for (const [highlightId, entry] of pdfDrawnHighlightsRef.current) {
+        if (entry.pageIndex !== pageIndex) continue;
+        paintPdfHighlight({
+          view,
+          pageIndexForDoc: (target) => pdfDocIndexRef.current.get(target),
+          highlightId,
+          pageIndex: entry.pageIndex,
+          quads: entry.quads,
+          color: entry.color,
+          elements: pdfHighlightElementsRef.current,
+          drawn: pdfDrawnHighlightsRef.current,
+        });
+      }
+    }, []);
+
     const [loading, setLoading] = useState(true);
     const [footnotePreview, setFootnotePreview] = useState<FootnotePreview | null>(null);
     const activeFootnoteKeyRef = useRef<string | null>(null);
@@ -2423,6 +2445,9 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
         const pdfDoc = detail.doc;
         if (format === "PDF" && pdfDoc) {
           pdfDocIndexRef.current.set(pdfDoc, detail.index ?? 0);
+          pdfDoc.addEventListener("readany-pdf-rendered", () =>
+            repaintPdfHighlightsForDoc(pdfDoc),
+          );
           void applyPdfPageThemeFilter(pdfDoc, detail.index ?? 0, appTheme);
 
           // Set up PDF text selection (reuses pdf.js' native selection so copy,
@@ -2504,6 +2529,7 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
         isFixedLayout,
         format,
         applyPdfPageThemeFilter,
+        repaintPdfHighlightsForDoc,
       ],
     );
     const docLoadHandlerRef = useRef(docLoadHandlerImpl);
@@ -3458,55 +3484,6 @@ export const FoliateViewer = forwardRef<FoliateViewerHandle, FoliateViewerProps>
       isFixedLayout,
       appTheme,
     ]);
-
-    // --- Re-paint PDF highlights after a re-render ---
-    // pdf.js replaces the text layer's children on every zoom/resize (and on the
-    // initial render), which removes the SVG overlays we painted. Re-paint them
-    // once the new render settles. Zoom is covered by the settings dependency;
-    // window/container resizes also trigger foliate's ResizeObserver -> #render,
-    // so watch those too or highlights would disappear until the next page turn.
-    // biome-ignore lint/correctness/useExhaustiveDependencies: fixedLayoutZoom is a trigger dep — the zoom re-render is what needs repainting
-    useEffect(() => {
-      if (!isFixedLayout) return;
-
-      const repaint = () => {
-        if (pdfDrawnHighlightsRef.current.size === 0) return;
-        const view = viewRef.current;
-        if (!view) return;
-        for (const [highlightId, entry] of pdfDrawnHighlightsRef.current) {
-          paintPdfHighlight({
-            view,
-            pageIndexForDoc: (doc) => pdfDocIndexRef.current.get(doc),
-            highlightId,
-            pageIndex: entry.pageIndex,
-            quads: entry.quads,
-            color: entry.color,
-            elements: pdfHighlightElementsRef.current,
-            drawn: pdfDrawnHighlightsRef.current,
-          });
-        }
-      };
-
-      const initialTimer = setTimeout(repaint, 350);
-
-      let resizeTimer: ReturnType<typeof setTimeout> | null = null;
-      const scheduleRepaint = () => {
-        if (resizeTimer) clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(repaint, 400);
-      };
-
-      window.addEventListener("resize", scheduleRepaint);
-      const container = containerRef.current;
-      const observer = container ? new ResizeObserver(scheduleRepaint) : null;
-      if (container) observer?.observe(container);
-
-      return () => {
-        clearTimeout(initialTimer);
-        if (resizeTimer) clearTimeout(resizeTimer);
-        window.removeEventListener("resize", scheduleRepaint);
-        observer?.disconnect();
-      };
-    }, [viewSettings.fixedLayoutZoom, isFixedLayout]);
 
     // Re-scale the content area when the window resizes (max-inline-size is
     // computed from renderer.clientWidth at book-open).

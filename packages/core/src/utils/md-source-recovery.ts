@@ -37,6 +37,18 @@ const RESTORABLE_ASSET_EXTENSIONS = new Set([
   "avif",
 ]);
 
+/**
+ * EPUB entries are attacker-controlled when a book arrives through sync.
+ * Never let a recovered asset escape the library `books/` directory (zip-slip).
+ */
+export function isSafeAssetRelativePath(path: string): boolean {
+  if (!path) return false;
+  if (path.includes("\0") || path.includes("\\")) return false;
+  if (path.startsWith("/")) return false;
+  if (/^[A-Za-z]:/.test(path)) return false;
+  return path.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
 export interface RecoveredMarkdownAsset {
   /** Path relative to the library `books/` folder (same as the Markdown src). */
   path: string;
@@ -88,6 +100,10 @@ export async function recoverMarkdownSourceFromEpub(
       const relativePath = entry.filename.slice("OEBPS/".length);
       if (!relativePath || relativePath === "source.md") continue;
       if (!isRestorableAsset(relativePath)) continue;
+      if (!isSafeAssetRelativePath(relativePath)) {
+        console.warn("[MD recovery] Skipping unsafe asset path:", relativePath);
+        continue;
+      }
 
       const bytes = (await entry.getData(new Uint8ArrayWriter())) as Uint8Array;
       assets.push({ path: relativePath, bytes });

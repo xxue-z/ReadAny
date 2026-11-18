@@ -1,4 +1,4 @@
-﻿import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { stemHash } from "../db/quiz-queries";
 import type { QuestionType, QuizConfig, QuizQuestion } from "../types";
 import { extractJson, tryParseAsQuestions, validateAndMapQuestion } from "./quiz-generator";

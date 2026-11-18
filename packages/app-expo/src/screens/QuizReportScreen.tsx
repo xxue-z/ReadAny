@@ -239,25 +239,30 @@ export default function QuizReportScreen() {
         <Text style={s.sectionTitle}>{t("quiz.perTypeAccuracy", "Accuracy by type")}</Text>
         <View style={s.breakdownGrid}>
           {types.map((type) => {
+            const gradable = type !== "short_answer";
             const rate = correctRateByType[type];
-            const c = scoreColor(rate);
+            const c = gradable ? scoreColor(rate) : colors.mutedForeground;
             return (
               <View key={type} style={s.breakdownItem}>
                 <Text style={s.breakdownType}>
                   {TYPE_LABEL_KEYS[type] ? t(TYPE_LABEL_KEYS[type]) : type}
                 </Text>
                 <View style={s.breakdownBarBg}>
-                  <View
-                    style={[
-                      s.breakdownBarFill,
-                      {
-                        backgroundColor: c,
-                        width: `${Math.round(rate * 100)}%` as unknown as number,
-                      },
-                    ]}
-                  />
+                  {gradable && (
+                    <View
+                      style={[
+                        s.breakdownBarFill,
+                        {
+                          backgroundColor: c,
+                          width: `${Math.round(rate * 100)}%` as unknown as number,
+                        },
+                      ]}
+                    />
+                  )}
                 </View>
-                <Text style={[s.breakdownRate, { color: c }]}>{Math.round(rate * 100)}%</Text>
+                <Text style={[s.breakdownRate, { color: c }]}>
+                  {gradable ? `${Math.round(rate * 100)}%` : "—"}
+                </Text>
               </View>
             );
           })}

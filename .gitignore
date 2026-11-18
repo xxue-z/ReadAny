@@ -61,3 +61,4 @@ theme-studio/.claude/settings.local.json
 bundle-check.js  
 sqlite-split.js 
 .worktrees/
+.tmp/

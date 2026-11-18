@@ -1,5 +1,10 @@
 import { getDB } from "../db/db-core";
-import { getQuizQuestions, getQuizSession, getQuizSessions } from "../db/quiz-queries";
+import {
+  getQuizQuestions,
+  getQuizSession,
+  getQuizSessions,
+  stemHash,
+} from "../db/quiz-queries";
 import type { IDatabase } from "../services/platform";
 import type { HistoryTrend, QuizQuestion, QuizReport, QuizSummary, WeakArea } from "../types/quiz";
 
@@ -84,7 +89,7 @@ async function computeWeakAreas(questions: QuizQuestion[]): Promise<WeakArea[]> 
   if (questions.length === 0) return [];
 
   const correctness = new Map<string, boolean>();
-  const questionIds: string[] = [];
+  const answered: QuizQuestion[] = [];
 
   for (const q of questions) {
     // Short answers have no automatic verdict; unanswered questions are not
@@ -92,25 +97,37 @@ async function computeWeakAreas(questions: QuizQuestion[]): Promise<WeakArea[]> 
     // tags as 100% wrong).
     if (q.type === "short_answer") continue;
     if (q.isCorrect === undefined) continue;
+    answered.push(q);
     correctness.set(q.id, q.isCorrect);
-    questionIds.push(q.id);
   }
 
-  if (questionIds.length === 0) return [];
+  if (answered.length === 0) return [];
 
   const db = await getDB();
-  const entries = await loadBankEntriesForQuestionIds(db, questionIds);
+  // A question reused from the bank is cloned into the session with a fresh id,
+  // so match tags by stem instead of by the session question id.
+  const stems = [...new Set(answered.map((q) => q.stem))];
+  const entries = await loadBankEntriesByStems(db, stems);
+  const tagsByStem = new Map<string, string[]>();
+  for (const entry of entries) {
+    const key = stemHash(entry.stem);
+    const tags = tagsByStem.get(key) ?? [];
+    for (const tag of entry.tags) {
+      if (!tags.includes(tag)) tags.push(tag);
+    }
+    tagsByStem.set(key, tags);
+  }
 
   // tag → Set<questionId>
   const tagQuestions = new Map<string, Set<string>>();
-  for (const entry of entries) {
-    for (const tag of entry.tags) {
+  for (const q of answered) {
+    for (const tag of tagsByStem.get(stemHash(q.stem)) ?? []) {
       let qSet = tagQuestions.get(tag);
       if (!qSet) {
         qSet = new Set();
         tagQuestions.set(tag, qSet);
       }
-      qSet.add(entry.questionId);
+      qSet.add(q.id);
     }
   }
 
@@ -133,26 +150,41 @@ async function computeWeakAreas(questions: QuizQuestion[]): Promise<WeakArea[]> 
 }
 
 interface BankEntryRow {
-  questionId: string;
+  stem: string;
   tags: string[];
 }
 
-async function loadBankEntriesForQuestionIds(
+async function loadBankEntriesByStems(
   db: IDatabase,
-  ids: string[],
+  stems: string[],
 ): Promise<BankEntryRow[]> {
-  if (ids.length === 0) return [];
+  if (stems.length === 0) return [];
 
-  const placeholders = ids.map(() => "?").join(",");
-  const rows = await db.select<{ question_id: string; tags: string }>(
-    `SELECT question_id, tags FROM question_bank WHERE question_id IN (${placeholders})`,
-    ids,
+  const placeholders = stems.map(() => "?").join(",");
+  const rows = await db.select<{ stem: string; tags: string | null }>(
+    `SELECT qq.stem AS stem, qb.tags AS tags
+     FROM question_bank qb
+     JOIN quiz_questions qq ON qb.question_id = qq.id
+     WHERE qq.stem IN (${placeholders})`,
+    stems,
   );
 
   return rows.map((r) => ({
-    questionId: r.question_id,
-    tags: JSON.parse(r.tags) as string[],
+    stem: r.stem,
+    tags: parseTags(r.tags),
   }));
+}
+
+function parseTags(value: string | null): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((tag): tag is string => typeof tag === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------

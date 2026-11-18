@@ -37,6 +37,31 @@ describe("collectMarkdownAssets", () => {
     expect(assets["assets/b1/persisted.png"]).toEqual(encoder.encode("bytes"));
   });
 
+  it("ignores image-like tokens inside fenced code blocks", async () => {
+    const markdown = [
+      "# Doc",
+      "",
+      "```md",
+      "![fake](img/a.png)",
+      "```",
+      "",
+      "![real](img/a.png)",
+    ].join("\n");
+    const visited: string[] = [];
+    const { markdown: rewritten } = await collectMarkdownAssets({
+      markdown,
+      readAsset: async (relativePath) => {
+        visited.push(relativePath);
+        return encoder.encode("bytes");
+      },
+      persistAsset: async () => "assets/b1/persisted.png",
+    });
+
+    expect(visited).toEqual(["img/a.png"]);
+    expect(rewritten).toContain("![fake](img/a.png)");
+    expect(rewritten).toContain("![real](assets/b1/persisted.png)");
+  });
+
   it("persists a shared src once and rewrites every occurrence", async () => {
     const calls: string[] = [];
     const { markdown: rewritten } = await collectMarkdownAssets({

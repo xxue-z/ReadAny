@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useAppStore } from "@/stores/app-store";
 import { answersEqual } from "@readany/core/quiz/scoring";
 import { useQuizStore } from "@readany/core/stores";
 import type { QuestionType } from "@readany/core/types";
@@ -86,23 +87,39 @@ export function QuizPlayer() {
     setMultiSelect(new Set());
   }, [currentQuestionIndex]);
 
+  const activeTabId = useAppStore((s) => s.activeTabId);
+  const [documentVisible, setDocumentVisible] = useState(
+    () => typeof document === "undefined" || document.visibilityState === "visible",
+  );
+
+  useEffect(() => {
+    const onChange = () => setDocumentVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onChange);
+    return () => document.removeEventListener("visibilitychange", onChange);
+  }, []);
+
+  const timerActive = activeTabId === "quiz" && documentVisible;
+
   const total = currentQuestions.length;
   const question = currentQuestions[localIndex] ?? null;
 
-  // Timer — increment every second while mounted.
+  // Timer — only advance while the quiz view is actually visible. The home
+  // views stay mounted behind display:none, so "mounted" is not enough.
   useEffect(() => {
+    if (!timerActive) return;
     const id = setInterval(() => setElapsed((e) => e + 1), 1000);
     return () => clearInterval(id);
-  }, []);
+  }, [timerActive]);
 
   // Checkpoint the elapsed time so a resumed quiz continues the clock instead
-  // of restarting at 0. Flush once more when the player unmounts.
+  // of restarting at 0. Flush when the view is hidden or the player unmounts.
   const saveElapsed = useQuizStore((s) => s.saveElapsed);
   const elapsedRef = useRef(elapsed);
   useEffect(() => {
     elapsedRef.current = elapsed;
   }, [elapsed]);
   useEffect(() => {
+    if (!timerActive) return;
     const id = setInterval(() => {
       void saveElapsed(elapsedRef.current);
     }, 15000);
@@ -110,7 +127,7 @@ export function QuizPlayer() {
       clearInterval(id);
       void saveElapsed(elapsedRef.current);
     };
-  }, [saveElapsed]);
+  }, [timerActive, saveElapsed]);
 
   // -------------------------------------------------------------------
   // Navigation

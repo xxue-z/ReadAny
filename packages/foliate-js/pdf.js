@@ -481,6 +481,11 @@ const render = async (page, doc, zoom) => {
       // Annotation rendering may fail for some pages
     }
   }
+
+  // The text layer is rebuilt on every render (zoom/resize). Tell the host
+  // viewer so it can restore highlight overlays at the new scale.
+  const CustomEventCtor = doc.defaultView?.CustomEvent ?? CustomEvent;
+  doc.dispatchEvent(new CustomEventCtor("readany-pdf-rendered"));
 };
 
 /**

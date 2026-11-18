@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { QuizQuestion } from "../types";
 
 const h = vi.hoisted(() => ({
-  bankRows: [] as { question_id: string; tags: string }[],
+  bankRows: [] as { stem: string; tags: string }[],
   questions: [] as QuizQuestion[],
 }));
 
@@ -11,11 +11,11 @@ vi.mock("../db/db-core", async (importOriginal) => {
   return {
     ...actual,
     getDB: async () => ({
-      // Honour the `question_id IN (…)` filter the builder issues.
+      // Honour the `qq.stem IN (…)` filter the builder issues.
       select: async (_sql: string, params: unknown[] = []) => {
         if (params.length === 0) return h.bankRows;
-        const ids = new Set(params.map(String));
-        return h.bankRows.filter((row) => ids.has(row.question_id));
+        const stems = new Set(params.map(String));
+        return h.bankRows.filter((row) => stems.has(row.stem));
       },
       execute: async () => {},
       close: async () => {},
@@ -108,8 +108,8 @@ describe("buildQuizReport", () => {
       question({ id: "q2" }),
     ];
     h.bankRows = [
-      { question_id: "q1", tags: JSON.stringify(["训练"]) },
-      { question_id: "q2", tags: JSON.stringify(["训练"]) },
+      { stem: "Q", tags: JSON.stringify(["训练"]) },
+      { stem: "Q", tags: JSON.stringify(["训练"]) },
     ];
 
     const report = await buildQuizReport("s1");
@@ -122,12 +122,24 @@ describe("buildQuizReport", () => {
       question({ id: "q2", isCorrect: false, userAnswer: "B" }),
     ];
     h.bankRows = [
-      { question_id: "q1", tags: JSON.stringify(["训练"]) },
-      { question_id: "q2", tags: JSON.stringify(["训练"]) },
+      { stem: "Q", tags: JSON.stringify(["训练"]) },
+      { stem: "Q", tags: JSON.stringify(["训练"]) },
     ];
 
     const report = await buildQuizReport("s1");
     expect(report.weakAreas.find((area) => area.tag === "训练")?.errorRate).toBe(1);
+  });
+
+  it("matches tags for a bank question cloned into the session", async () => {
+    h.questions = [
+      question({ id: "clone-1", stem: "Original stem", isCorrect: false, userAnswer: "B" }),
+    ];
+    h.bankRows = [{ stem: "Original stem", tags: JSON.stringify(["复用"]) }];
+
+    const report = await buildQuizReport("s1");
+    const area = report.weakAreas.find((entry) => entry.tag === "复用");
+    expect(area?.errorRate).toBe(1);
+    expect(area?.questionCount).toBe(1);
   });
 
   it("keeps unfinished sessions out of the history trend", async () => {

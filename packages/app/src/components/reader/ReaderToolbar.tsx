@@ -109,6 +109,7 @@ export function ReaderToolbar({
   const { isOpen: isNotebookOpen, toggleNotebook, startNewNote } = useNotebookStore();
 
   const bookmarks = useAnnotationStore((s) => s.bookmarks);
+  const notes = useAnnotationStore((s) => s.notes);
   const addBookmark = useAnnotationStore((s) => s.addBookmark);
   const removeBookmark = useAnnotationStore((s) => s.removeBookmark);
 
@@ -149,10 +150,17 @@ export function ReaderToolbar({
     const pageNumber = currentPage > 0 ? currentPage : 1;
     const cfi = `page:${pageNumber}`;
     const chapterTitle = t("notebook.pageNNote", { n: pageNumber });
+    // Opening the editor for a page that already has a note must preload it,
+    // otherwise saving replaces the previous note with the new (possibly empty)
+    // content.
+    const existingNote = notes.find(
+      (note) => note.bookId === bookId && note.cfi === cfi && !note.highlightId,
+    );
     startNewNote({
       text: chapterTitle,
       cfi,
       chapterTitle,
+      existingNote: existingNote?.content,
     });
   };
 

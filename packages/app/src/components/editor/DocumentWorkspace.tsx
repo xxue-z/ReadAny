@@ -1,4 +1,4 @@
-﻿import { MarkdownEditor } from "@/components/ui/markdown-editor";
+import { MarkdownEditor } from "@/components/ui/markdown-editor";
 import { getDesktopLibraryRoot } from "@/lib/storage/desktop-library-root";
 import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";

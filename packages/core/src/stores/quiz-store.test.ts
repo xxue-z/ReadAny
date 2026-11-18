@@ -193,6 +193,7 @@ describe("startQuiz generation guards", () => {
     const state = useQuizStore.getState();
     expect(state.isTaking).toBe(true);
     expect(state.currentQuestions).toHaveLength(2);
+    expect(state.sessions[0]?.id).toBe(state.currentSession?.id);
     expect(state.currentQuestions[0]?.sessionId).toBe(state.currentSession?.id);
     expect(mem.sessions.size).toBe(1);
     expect(mem.questions.size).toBe(2);

@@ -207,6 +207,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
       );
 
       set({
+        sessions: [session, ...get().sessions.filter((entry) => entry.id !== session.id)],
         currentSession: session,
         currentQuestions: sessionQuestions,
         currentQuestionIndex: 0,

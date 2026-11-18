@@ -1748,5 +1748,18 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       // The vector index describes the previous text.
       ...(wasVectorized ? { isVectorized: false, vectorizeProgress: 0 } : {}),
     });
+
+    // The desktop save path re-queues vectorization for an existing index; do
+    // the same here so editing does not leave RAG pointing at stale text.
+    if (wasVectorized) {
+      try {
+        const vmState = useVectorModelStore.getState();
+        if (vmState.vectorModelEnabled && vmState.hasVectorCapability()) {
+          queueAutoVectorize(book, bytesToBase64(result.epubBytes), "application/epub+zip");
+        }
+      } catch (err) {
+        console.warn("[Library] Re-vectorize after save failed:", err);
+      }
+    }
   },
 }));

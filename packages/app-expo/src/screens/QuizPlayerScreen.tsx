@@ -9,7 +9,7 @@ import {
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
 import { type ThemeColors, fontSize, fontWeight, radius, useColors } from "@/styles/theme";
-import { useNavigation, useRoute } from "@react-navigation/native";
+import { useIsFocused, useNavigation, useRoute } from "@react-navigation/native";
 import type { RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { answersEqual } from "@readany/core/quiz/scoring";
@@ -19,6 +19,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   ScrollView,
   type StyleProp,
@@ -84,6 +85,17 @@ export default function QuizPlayerScreen() {
   const [multiSelected, setMultiSelected] = useState<string[]>([]);
   const [shortAnswerText, setShortAnswerText] = useState("");
 
+  const isFocused = useIsFocused();
+  const [appActive, setAppActive] = useState(AppState.currentState === "active");
+  useEffect(() => {
+    const subscription = AppState.addEventListener("change", (state) => {
+      setAppActive(state === "active");
+    });
+    return () => subscription.remove();
+  }, []);
+
+  const timerActive = isTaking && isFocused && appActive;
+
   // Load session on mount
   // biome-ignore lint/correctness/useExhaustiveDependencies: loadSession/ nav stable from store
   useEffect(() => {
@@ -102,16 +114,16 @@ export default function QuizPlayerScreen() {
       .finally(() => setLoading(false));
   }, [sessionId]);
 
-  // Timer
+  // Timer — pause when the screen is not focused or the app is backgrounded.
   useEffect(() => {
-    if (!isTaking) return;
+    if (!timerActive) return;
     timerRef.current = setInterval(() => {
       setElapsed((prev) => prev + 1);
     }, 1000);
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isTaking]);
+  }, [timerActive]);
 
   // Checkpoint the elapsed time so a resumed quiz continues the clock instead
   // of restarting at 0.
@@ -120,7 +132,7 @@ export default function QuizPlayerScreen() {
     elapsedRef.current = elapsed;
   }, [elapsed]);
   useEffect(() => {
-    if (!isTaking) return;
+    if (!timerActive) return;
     const id = setInterval(() => {
       void saveElapsed(elapsedRef.current);
     }, 15000);
@@ -128,7 +140,7 @@ export default function QuizPlayerScreen() {
       clearInterval(id);
       void saveElapsed(elapsedRef.current);
     };
-  }, [isTaking, saveElapsed]);
+  }, [timerActive, saveElapsed]);
 
   // Reset local answer UI when the question changes.
   // NOTE: this used to run on every render (no dependency array), which

@@ -12,11 +12,54 @@ const IMAGE_SRC_PATTERNS = [
   /<img[^>]+src=["']([^"']+)["'][^>]*>/gi,
 ];
 
+const FENCE_LINE = /^\s{0,3}(`{3,}|~{3,})(.*)$/;
+
+interface TextRange {
+  start: number;
+  end: number;
+}
+
+/** Offsets of fenced code blocks, including their fence lines. */
+function fencedCodeRanges(markdown: string): TextRange[] {
+  const ranges: TextRange[] = [];
+  let open: { marker: string; length: number; start: number } | null = null;
+  let offset = 0;
+
+  for (const rawLine of markdown.split("\n")) {
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    const match = line.match(FENCE_LINE);
+
+    if (!open) {
+      if (match?.[1]) {
+        open = { marker: match[1][0] as string, length: match[1].length, start: offset };
+      }
+    } else if (
+      match?.[1]?.[0] === open.marker &&
+      match[1].length >= open.length &&
+      (match[2] ?? "").trim() === ""
+    ) {
+      ranges.push({ start: open.start, end: offset + rawLine.length });
+      open = null;
+    }
+
+    offset += rawLine.length + 1;
+  }
+
+  if (open) ranges.push({ start: open.start, end: markdown.length });
+  return ranges;
+}
+
+function isInFencedCode(ranges: TextRange[], index: number): boolean {
+  return ranges.some((range) => index >= range.start && index < range.end);
+}
+
 /** Extract unique, local image sources from Markdown/HTML. */
 export function extractMarkdownImageSources(markdown: string): string[] {
   const sources = new Set<string>();
+  const fenced = fencedCodeRanges(markdown);
   for (const pattern of IMAGE_SRC_PATTERNS) {
     for (const match of markdown.matchAll(pattern)) {
+      if (isInFencedCode(fenced, match.index ?? 0)) continue;
       const src = match[1]?.trim();
       if (src) sources.add(src);
     }
@@ -47,12 +90,14 @@ function rewriteImageSources(
 ): string {
   if (replacements.size === 0) return markdown;
 
+  const fenced = fencedCodeRanges(markdown);
   const edits: { start: number; end: number; text: string }[] = [];
   for (const match of markdown.matchAll(IMAGE_TOKEN_SRC_PATTERN)) {
+    const index = match.index ?? 0;
+    if (isInFencedCode(fenced, index)) continue;
     const src = match[1] || match[2];
     const next = src ? replacements.get(src) : undefined;
     if (!src || !next) continue;
-    const index = match.index ?? 0;
     // Locate the src inside the token. lastIndexOf favours the url/attribute
     // position when the alt text happens to contain the same string.
     const local = match[0].lastIndexOf(src);

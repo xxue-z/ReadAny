@@ -111,6 +111,13 @@ export function NotebookPanel({
   const handleSave = () => {
     if (pendingNote) {
       if (isCbz) {
+        // An empty save must not wipe an existing page note.
+        if (!noteContent.trim()) {
+          clearDraft(draftKey);
+          clearPending();
+          setNoteContent("");
+          return;
+        }
         // CBZ: create standalone Note (no highlight linkage)
         const existingNote = bookNotes.find((n) => n.cfi === pendingNote.cfi && !n.highlightId);
         if (existingNote) {
