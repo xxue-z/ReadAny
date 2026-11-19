@@ -3,6 +3,7 @@ import { useVectorModelStore } from "@/stores/vector-model-store";
 import { triggerVectorizeBook as coreTriggerVectorizeBook } from "@readany/core/rag";
 import type {
   ChapterData,
+  VectorizeRunOptions,
   VectorizeStatusCallback,
   VectorizeTriggerConfig,
 } from "@readany/core/rag";
@@ -14,6 +15,7 @@ export async function triggerVectorizeBook(
   _filePath: string,
   chapters: ChapterData[],
   onProgress?: VectorizeStatusCallback,
+  options?: VectorizeRunOptions,
 ): Promise<void> {
   const vmState = useVectorModelStore.getState();
 
@@ -39,5 +41,5 @@ export async function triggerVectorizeBook(
   };
 
   // 3. Delegate to core vectorization pipeline which does the chunking & embedding
-  await coreTriggerVectorizeBook(bookId, chapters, config, callbacks, onProgress);
+  await coreTriggerVectorizeBook(bookId, chapters, config, callbacks, onProgress, options);
 }

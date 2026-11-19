@@ -16,6 +16,7 @@ import { type ThemeColors, fontSize, fontWeight, radius, useColors } from "@/sty
 import { useNavigation } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getQuestionBank } from "@readany/core/db/quiz-queries";
+import { normalizeQuizQuestionCount } from "@readany/core/quiz/quiz-helpers";
 import { useQuizStore } from "@readany/core/stores/quiz-store";
 import { useSettingsStore } from "@readany/core/stores/settings-store";
 import type {
@@ -200,7 +201,7 @@ export default function QuizScreen() {
 
       const config: QuizConfig = {
         type: customType,
-        questionCount: Number(customCount) || 10,
+        questionCount: normalizeQuizQuestionCount(customCount),
         typeDistribution: typeDist,
         difficulty: customDifficulty,
         bankRatio: customBankRatio,
@@ -465,6 +466,7 @@ export default function QuizScreen() {
         style={s.fieldInput}
         value={customCount}
         onChangeText={setCustomCount}
+        onEndEditing={() => setCustomCount(String(normalizeQuizQuestionCount(customCount)))}
         keyboardType="number-pad"
         placeholder="10"
         placeholderTextColor={colors.mutedForeground}

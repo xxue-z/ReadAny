@@ -62,12 +62,15 @@ export type {
 export { vectorizeBook } from "./vectorize";
 export type { VectorizeCallback } from "./vectorize";
 
-export { triggerVectorizeBook } from "./vectorize-trigger";
+export { triggerVectorizeBook, isVectorizeAbortError } from "./vectorize-trigger";
 export type {
+  VectorizeRunOptions,
   VectorizeStatusCallback,
   VectorizeTriggerConfig,
   VectorizeTriggerCallbacks,
 } from "./vectorize-trigger";
+export { PerBookReindexCoordinator } from "./reindex-coordinator";
+export type { ReindexRun, ReindexRunContext } from "./reindex-coordinator";
 
 export {
   setVectorDB,

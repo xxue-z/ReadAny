@@ -18,10 +18,10 @@ import { useReadingSession } from "@/hooks/use-reading-session";
 import { useResizablePanel } from "@/hooks/use-resizable-panel";
 import { useResolvedSrc } from "@/hooks/use-resolved-src";
 import { hasSeenReaderTour, startReaderTour } from "@/lib/reader-tour";
+import { getCachedBlob } from "@/lib/reader/blob-cache";
 import { DocumentLoader } from "@/lib/reader/document-loader";
 import type { BookDoc, BookFormat } from "@/lib/reader/document-loader";
 import { isFixedLayoutBook } from "@/lib/reader/document-loader";
-import { getCachedBlob } from "@/lib/reader/blob-cache";
 import { useAnnotationStore } from "@/stores/annotation-store";
 import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
@@ -740,7 +740,10 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         // Check if we need to re-render (new highlight, note status changed, color
         // changed, or PDF geometry changed)
         const needsRender =
-          !existing || existing.hasNote !== hasNote || existing.color !== color || existing.quadKey !== quadKey;
+          !existing ||
+          existing.hasNote !== hasNote ||
+          existing.color !== color ||
+          existing.quadKey !== quadKey;
 
         if (needsRender) {
           // Remove old annotation if exists
@@ -1507,7 +1510,24 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
   }, [chapterTranslation.state]);
 
   const handleSelection = useCallback(
-    (sel: BookSelection | null) => {
+    (incoming: BookSelection | null) => {
+      let sel = incoming;
+      if (sel?.quads && sel.pdfPageIndex !== undefined) {
+        const existing = findOverlappingPdfHighlight(
+          highlights.filter((highlight) => highlight.bookId === bookId),
+          sel.pdfPageIndex,
+          sel.quads,
+          pdfPageIndexOfHighlight,
+        );
+        if (existing) {
+          sel = {
+            ...sel,
+            annotated: true,
+            highlightId: existing.id,
+            color: existing.color,
+          };
+        }
+      }
       setSelection(sel);
       if (sel) {
         setSelectedText(tabId, sel.text, null);
@@ -1595,7 +1615,7 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
         setSelectedText(tabId, "", null);
       }
     },
-    [tabId, setSelectedText, toolbarVisible],
+    [tabId, setSelectedText, toolbarVisible, highlights, bookId],
   );
 
   // --- Navigation (for toolbar buttons) ---
@@ -1639,10 +1659,7 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
             updatedAt: Date.now(),
           });
           if (isPdf && selection.pdfPageIndex !== undefined) {
-            foliateRef.current?.removePdfHighlight(
-              existingHighlight.id,
-              selection.pdfPageIndex,
-            );
+            foliateRef.current?.removePdfHighlight(existingHighlight.id, selection.pdfPageIndex);
             foliateRef.current?.drawPdfHighlight(
               existingHighlight.id,
               selection.pdfPageIndex,
@@ -1759,10 +1776,7 @@ export function ReaderView({ bookId, tabId }: ReaderViewProps) {
 
       // Remove from view
       if (selection.quads && selection.pdfPageIndex !== undefined) {
-        foliateRef.current?.removePdfHighlight(
-          selection.highlightId,
-          selection.pdfPageIndex,
-        );
+        foliateRef.current?.removePdfHighlight(selection.highlightId, selection.pdfPageIndex);
       } else {
         foliateRef.current?.deleteAnnotation({ value: selection.cfi });
       }

@@ -8,6 +8,7 @@ import { useVectorModelStore } from "@/stores/vector-model-store";
  * Re-exports the core types for convenience.
  */
 import {
+  type VectorizeRunOptions,
   type VectorizeStatusCallback,
   type VectorizeTriggerConfig,
   triggerVectorizeBook as coreTriggerVectorizeBook,
@@ -24,6 +25,7 @@ export async function triggerVectorizeBook(
   bookId: string,
   filePath: string,
   onProgress?: VectorizeStatusCallback,
+  options?: VectorizeRunOptions,
 ): Promise<void> {
   // Resolve managed relative paths (e.g., "books/{id}.epub") to the active desktop library root.
   const resolvedPath = await resolveDesktopDataPath(filePath);
@@ -56,5 +58,5 @@ export async function triggerVectorizeBook(
   const chapters = await extractBookChapters(resolvedPath);
 
   // Delegate to core
-  await coreTriggerVectorizeBook(bookId, chapters, config, callbacks, onProgress);
+  await coreTriggerVectorizeBook(bookId, chapters, config, callbacks, onProgress, options);
 }

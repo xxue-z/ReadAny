@@ -1,4 +1,4 @@
-import { QuizGenerationError } from "@readany/core/stores/quiz-store";
+import { QuizAnswerPersistenceError, QuizGenerationError } from "@readany/core/quiz/quiz-helpers";
 import type { AIConfig } from "@readany/core/types";
 import type { TFunction } from "i18next";
 
@@ -14,6 +14,11 @@ export function hasUsableAIConfig(aiConfig: AIConfig | undefined | null): aiConf
  * Falls back to the raw error message for unexpected failures.
  */
 export function getQuizErrorMessage(err: unknown, t: TFunction): string {
+  if (err instanceof QuizAnswerPersistenceError) {
+    return t("quiz.errorAnswerSaveFailed", {
+      defaultValue: "答案保存失败，请重试后再提交测验。",
+    });
+  }
   if (err instanceof QuizGenerationError) {
     switch (err.code) {
       case "NO_AI_CONFIG":

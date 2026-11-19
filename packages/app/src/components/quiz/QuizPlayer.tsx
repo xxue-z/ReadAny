@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
+import { getQuizErrorMessage } from "./quiz-error";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -200,10 +202,13 @@ export function QuizPlayer() {
     try {
       // Persist the actual answering time so the report is not always 0s.
       await completeQuiz(elapsed);
+    } catch (err) {
+      console.error("[QuizPlayer] Failed to complete quiz:", err);
+      toast.error(getQuizErrorMessage(err, t));
     } finally {
       setIsCompleting(false);
     }
-  }, [completeQuiz, elapsed]);
+  }, [completeQuiz, elapsed, t]);
 
   const unansweredCount = useMemo(
     () => currentQuestions.filter((q) => q.userAnswer === undefined).length,

@@ -13,6 +13,7 @@ import {
 import { Slider } from "@/components/ui/slider";
 import { useLibraryStore } from "@/stores/library-store";
 import { useSettingsStore } from "@/stores/settings-store";
+import { normalizeQuizQuestionCount } from "@readany/core/quiz/quiz-helpers";
 import { useQuizStore } from "@readany/core/stores/quiz-store";
 import type { QuestionType, QuizConfig } from "@readany/core/types";
 import { Play, Settings2 } from "lucide-react";
@@ -179,7 +180,7 @@ export function CustomQuiz() {
           min={3}
           max={50}
           value={questionCount}
-          onChange={(e) => setQuestionCount(Math.max(3, Math.min(50, Number(e.target.value) || 3)))}
+          onChange={(e) => setQuestionCount(normalizeQuizQuestionCount(e.target.value))}
           className="w-32"
         />
       </div>

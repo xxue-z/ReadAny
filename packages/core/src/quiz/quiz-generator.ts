@@ -5,6 +5,7 @@ import { getAllReadingSessions, getReadingSessionsByDateRange } from "../db/sess
 import { search } from "../rag/search";
 import type { AIConfig, QuestionType, QuizConfig, QuizQuestion, SearchResult } from "../types";
 import { generateId } from "../utils/generate-id";
+import { normalizeChoiceAnswer } from "./quiz-helpers";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -112,8 +113,10 @@ async function fetchChunksForBook(bookId: string, topK: number): Promise<SearchR
           allResults.push(r);
         }
       }
-    } catch {
-      // Hybrid search may fail (e.g. no vector index); skip this query.
+    } catch (err) {
+      // Hybrid search may fail (e.g. no vector index); keep going with the
+      // remaining query patterns, but leave a diagnostic trail.
+      console.warn("[QuizGenerator] Search failed for quiz material:", { bookId, query, err });
     }
   }
 
@@ -580,8 +583,6 @@ export function validateAndMapQuestion(
   // Validate answer
   const answer = raw.answer;
   if (!answer || typeof answer !== "object") return null;
-  const correct = answer.correct;
-  if (correct === undefined || correct === null) return null;
   const explanation = typeof answer.explanation === "string" ? answer.explanation : "";
 
   // Validate options for choice types
@@ -600,6 +601,9 @@ export function validateAndMapQuestion(
     // short_answer has no options
     options = undefined;
   }
+
+  const correct = normalizeChoiceAnswer(type, answer.correct, options);
+  if (correct === null) return null;
 
   const difficulty =
     typeof raw.difficulty === "number" && raw.difficulty >= 1 && raw.difficulty <= 3
@@ -825,6 +829,10 @@ export async function generateQuizQuestions(
   }
 
   if (chunkResults.size === 0) {
+    console.warn("[QuizGenerator] No searchable chunks returned for quiz material:", {
+      bookIds,
+      remainingCount,
+    });
     // No reading material available — return whatever the bank/wrong pools gave us.
     return reused.slice(0, totalRequested);
   }
@@ -1003,18 +1011,31 @@ export async function generateVariantQuestion(
     return fallbackVariant;
   }
 
+  const variantType = raw.type as QuestionType;
   const validatedAnswer = raw.answer;
-  const answerCorrect = validatedAnswer?.correct ?? baseQuestion.answer.correct;
   const answerExplanation = validatedAnswer?.explanation ?? baseQuestion.answer.explanation;
 
-  let options = raw.options;
-  if (baseQuestion.type !== "short_answer") {
+  let options = raw.options?.map((option) => ({
+    key: String(option.key || ""),
+    content: String(option.content || ""),
+  }));
+  if (variantType !== "short_answer") {
     if (!Array.isArray(options) || options.length < 2) {
       options = baseQuestion.options;
+    }
+    if (options?.some((option) => !option.key || !option.content)) {
+      return fallbackVariant;
     }
   } else {
     options = undefined;
   }
+
+  const answerCorrect = normalizeChoiceAnswer(
+    variantType,
+    validatedAnswer?.correct ?? baseQuestion.answer.correct,
+    options,
+  );
+  if (answerCorrect === null) return fallbackVariant;
 
   const difficulty =
     typeof raw.difficulty === "number" && raw.difficulty >= 1 && raw.difficulty <= 3
@@ -1024,7 +1045,7 @@ export async function generateVariantQuestion(
   return {
     id: generateId(),
     sessionId: baseQuestion.sessionId,
-    type: raw.type as QuestionType,
+    type: variantType,
     stem: raw.stem.trim(),
     options,
     answer: {

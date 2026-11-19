@@ -3,7 +3,11 @@ import {
   extractBookMetadata,
   extractBookMetadataFromFile,
 } from "@/lib/book/metadata-extractor";
-import { queueBook as queueAutoVectorize } from "@/lib/rag/auto-vectorize-service";
+import {
+  cancelBookVectorization,
+  hasBookVectorization,
+  queueBook as queueAutoVectorize,
+} from "@/lib/rag/auto-vectorize-service";
 import {
   type ImportBooksResult,
   createEmptyImportBooksResult,
@@ -18,6 +22,8 @@ import { generateId } from "@readany/core/utils";
 import { create } from "zustand";
 import { debouncedSave, loadFromFS } from "./persist";
 import { useVectorModelStore } from "./vector-model-store";
+
+const reindexDesired = new Set<string>();
 
 // Hermes (React Native) only supports UTF-8 in TextDecoder.
 // text-encoding polyfill detects the native TextDecoder and skips installing
@@ -106,7 +112,11 @@ export interface LibraryState {
   addTagToBook: (bookId: string, tag: string) => void;
   removeTagFromBook: (bookId: string, tag: string) => void;
   createDocument: (title?: string) => Promise<Book | null>;
-  saveDocument: (bookId: string, markdown: string) => Promise<void>;
+  saveDocument: (
+    bookId: string,
+    markdown: string,
+    options?: { refreshReader?: boolean },
+  ) => Promise<void>;
 }
 
 async function resolveAppPath(relativePath: string): Promise<string> {
@@ -1705,7 +1715,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     return book;
   },
 
-  saveDocument: async (bookId, markdown) => {
+  saveDocument: async (bookId, markdown, _options) => {
     const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
     const { collectMarkdownAssets } = await import("@readany/core/utils/md-assets");
     const platform = getPlatformService();
@@ -1740,26 +1750,40 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     if (!book) return;
 
     const titleChanged = result.bookTitle !== book.meta.title;
-    const wasVectorized = !!book.isVectorized;
+    const shouldReindex =
+      !!book.isVectorized || hasBookVectorization(bookId) || reindexDesired.has(bookId);
+    const vmState = useVectorModelStore.getState();
+    const canReindex = vmState.vectorModelEnabled && vmState.hasVectorCapability();
     await get().updateBook(bookId, {
       // Always bump updatedAt; the text changed even when the title did not.
       updatedAt: Date.now(),
       ...(titleChanged ? { meta: { ...book.meta, title: result.bookTitle } } : {}),
       // The vector index describes the previous text.
-      ...(wasVectorized ? { isVectorized: false, vectorizeProgress: 0 } : {}),
+      ...(shouldReindex ? { isVectorized: false, vectorizeProgress: 0 } : {}),
     });
 
-    // The desktop save path re-queues vectorization for an existing index; do
-    // the same here so editing does not leave RAG pointing at stale text.
-    if (wasVectorized) {
-      try {
-        const vmState = useVectorModelStore.getState();
-        if (vmState.vectorModelEnabled && vmState.hasVectorCapability()) {
-          queueAutoVectorize(book, bytesToBase64(result.epubBytes), "application/epub+zip");
-        }
-      } catch (err) {
-        console.warn("[Library] Re-vectorize after save failed:", err);
-      }
+    if (!shouldReindex) return;
+    if (!canReindex) {
+      cancelBookVectorization(bookId);
+      reindexDesired.delete(bookId);
+      return;
+    }
+
+    reindexDesired.add(bookId);
+    try {
+      void queueAutoVectorize(book, bytesToBase64(result.epubBytes), "application/epub+zip", {
+        onStatus: ({ status }) => {
+          if (status === "completed") {
+            reindexDesired.delete(bookId);
+          } else if (status === "error") {
+            reindexDesired.add(bookId);
+            void get().updateBook(bookId, { isVectorized: false, vectorizeProgress: 0 });
+          }
+        },
+      });
+    } catch (err) {
+      reindexDesired.add(bookId);
+      console.warn("[Library] Re-vectorize after save failed:", err);
     }
   },
 }));

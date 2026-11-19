@@ -2,6 +2,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { useSettingsStore } from "@/stores/settings-store";
+import { formatQuizAnswer } from "@readany/core/quiz/quiz-helpers";
+import { answersEqual } from "@readany/core/quiz/scoring";
 import { useQuizStore } from "@readany/core/stores";
 import type { HistoryTrend as HistoryTrendType, QuestionType } from "@readany/core/types";
 import { cn } from "@readany/core/utils";
@@ -473,7 +475,9 @@ export function QuizReport() {
                           {q.options.map((opt) => {
                             const isCorrectOpt = Array.isArray(q.answer.correct)
                               ? (q.answer.correct as string[]).includes(opt.key)
-                              : q.answer.correct === opt.key;
+                              : q.type === "true_false"
+                                ? answersEqual(q, q.answer.correct, opt.key)
+                                : q.answer.correct === opt.key;
                             return (
                               <li
                                 key={opt.key}
@@ -523,9 +527,10 @@ export function QuizReport() {
                           {t("quiz.correctAnswer", "Correct answer")}:
                         </span>
                         <span className="font-medium text-emerald-600">
-                          {Array.isArray(q.answer.correct)
-                            ? (q.answer.correct as string[]).join(", ")
-                            : String(q.answer.correct)}
+                          {formatQuizAnswer(q, {
+                            trueLabel: t("quiz.trueLabel", "True"),
+                            falseLabel: t("quiz.falseLabel", "False"),
+                          })}
                         </span>
                       </div>
                     </div>

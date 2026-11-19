@@ -69,6 +69,6 @@ export interface VectorizeProgress {
   bookId: string;
   totalChunks: number;
   processedChunks: number;
-  status: "idle" | "chunking" | "embedding" | "indexing" | "completed" | "error";
+  status: "idle" | "chunking" | "embedding" | "indexing" | "completed" | "cancelled" | "error";
   error?: string;
 }

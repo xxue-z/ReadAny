@@ -295,6 +295,81 @@ describe("JSON parsing resilience", () => {
   });
 });
 
+describe("choice answer validation", () => {
+  const options = [
+    { key: "A", content: "Alpha" },
+    { key: "B", content: "Beta" },
+    { key: "C", content: "Gamma" },
+  ];
+  const validate = (raw: Record<string, unknown>) =>
+    validateAndMapQuestion(
+      raw as Parameters<typeof validateAndMapQuestion>[0],
+      "session-answer",
+      2,
+      new Set(),
+      new Set(),
+    );
+  const base = {
+    stem: "Which statements are true?",
+    difficulty: 2,
+    options,
+  };
+
+  it("normalises a comma-separated multi-choice answer", () => {
+    const question = validate({
+      ...base,
+      type: "multi_choice",
+      answer: { correct: "A, C", explanation: "because" },
+    });
+    expect(question?.answer.correct).toEqual(["A", "C"]);
+  });
+
+  it("rejects answer keys that are not in the options", () => {
+    expect(
+      validate({
+        ...base,
+        type: "single_choice",
+        answer: { correct: "Z", explanation: "" },
+      }),
+    ).toBeNull();
+  });
+
+  it("rejects multiple keys for single choice", () => {
+    expect(
+      validate({
+        ...base,
+        type: "single_choice",
+        answer: { correct: ["A", "B"], explanation: "" },
+      }),
+    ).toBeNull();
+  });
+
+  it("normalises true/false option keys to semantic values", () => {
+    const question = validate({
+      type: "true_false",
+      stem: "The sky is blue.",
+      difficulty: 1,
+      options: [
+        { key: "A", content: "True" },
+        { key: "B", content: "False" },
+      ],
+      answer: { correct: "A", explanation: "" },
+    });
+    expect(question?.answer.correct).toBe("true");
+  });
+
+  it("rejects non-string short answers", () => {
+    expect(
+      validate({
+        type: "short_answer",
+        stem: "Explain the argument.",
+        difficulty: 2,
+        answer: { correct: ["not", "valid"], explanation: "" },
+      }),
+    ).toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 3. Quiz scoring logic
 // ---------------------------------------------------------------------------
@@ -395,7 +470,9 @@ describe("quiz template configs", () => {
     expect(dailyConfig.type).toBe("daily");
     expect(dailyConfig.questionCount).toBe(10);
     expect(dailyConfig.timeRange).toBeDefined();
-    expect((dailyConfig.timeRange?.end ?? 0) - (dailyConfig.timeRange?.start ?? 0)).toBe(sevenDaysMs);
+    expect((dailyConfig.timeRange?.end ?? 0) - (dailyConfig.timeRange?.start ?? 0)).toBe(
+      sevenDaysMs,
+    );
     expect(dailyConfig.difficulty).toBeGreaterThanOrEqual(1);
     expect(dailyConfig.difficulty).toBeLessThanOrEqual(2);
   });
@@ -416,7 +493,9 @@ describe("quiz template configs", () => {
     expect(monthlyConfig.type).toBe("monthly");
     expect(monthlyConfig.questionCount).toBe(50);
     expect(monthlyConfig.timeRange).toBeDefined();
-    expect((monthlyConfig.timeRange?.end ?? 0) - (monthlyConfig.timeRange?.start ?? 0)).toBe(thirtyDaysMs);
+    expect((monthlyConfig.timeRange?.end ?? 0) - (monthlyConfig.timeRange?.start ?? 0)).toBe(
+      thirtyDaysMs,
+    );
     expect(monthlyConfig.difficulty).toBeGreaterThanOrEqual(1);
     expect(monthlyConfig.difficulty).toBeLessThanOrEqual(3);
   });

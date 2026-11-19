@@ -1,5 +1,7 @@
 import { MarkdownEditor } from "@/components/ui/markdown-editor";
+import { registerDocumentFlush } from "@/lib/editor/document-save-registry";
 import { getDesktopLibraryRoot } from "@/lib/storage/desktop-library-root";
+import { useAnnotationStore } from "@/stores/annotation-store";
 import { useAppStore } from "@/stores/app-store";
 import { useLibraryStore } from "@/stores/library-store";
 import { analyzeMarkdownFidelity, recoverMarkdownSourceFromEpub } from "@readany/core/utils";
@@ -32,6 +34,11 @@ export function DocumentWorkspace({ bookId, tabId }: DocumentWorkspaceProps) {
   const addTab = useAppStore((s) => s.addTab);
   const setActiveTab = useAppStore((s) => s.setActiveTab);
   const updateTabTitle = useAppStore((s) => s.updateTabTitle);
+  const hasAnnotations = useAnnotationStore(
+    (s) =>
+      s.highlights.some((highlight) => highlight.bookId === bookId) ||
+      s.notes.some((note) => note.bookId === bookId),
+  );
   const [markdown, setMarkdown] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
@@ -44,17 +51,12 @@ export function DocumentWorkspace({ bookId, tabId }: DocumentWorkspaceProps) {
   const markdownRef = useRef("");
   const lastSavedRef = useRef<string | null>(null);
   const readOnlyRef = useRef(false);
-  const saveRef = useRef(saveDocument);
 
   const book = books.find((b) => b.id === bookId);
   const docTabId = tabId ?? `document-${bookId}`;
 
   const fidelity = useMemo(() => analyzeMarkdownFidelity(markdown), [markdown]);
   const fidelityLabels = fidelity.issues.map((issue) => t(FIDELITY_ISSUE_KEYS[issue], issue));
-
-  useEffect(() => {
-    saveRef.current = saveDocument;
-  }, [saveDocument]);
 
   useEffect(() => {
     markdownRef.current = markdown;
@@ -153,7 +155,10 @@ export function DocumentWorkspace({ bookId, tabId }: DocumentWorkspaceProps) {
   // -------------------------------------------------------------------
 
   const persist = useCallback(
-    async (value: string, options?: { silent?: boolean }): Promise<boolean> => {
+    async (
+      value: string,
+      options?: { silent?: boolean; refreshReader?: boolean },
+    ): Promise<boolean> => {
       if (readOnlyRef.current) return false;
       if (!value.trim()) {
         // Explicit saves must say why nothing happened; autosave stays quiet so
@@ -166,7 +171,7 @@ export function DocumentWorkspace({ bookId, tabId }: DocumentWorkspaceProps) {
 
       setIsSaving(true);
       try {
-        await saveDocument(bookId, value);
+        await saveDocument(bookId, value, { refreshReader: options?.refreshReader });
         lastSavedRef.current = value;
         const savedBook = useLibraryStore.getState().books.find((b) => b.id === bookId);
         if (savedBook?.meta.title) {
@@ -204,22 +209,34 @@ export function DocumentWorkspace({ bookId, tabId }: DocumentWorkspaceProps) {
     };
   }, [markdown, isLoading, isReadOnly, persist]);
 
+  const flushLatest = useCallback(async (): Promise<boolean> => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (readOnlyRef.current) return true;
+    const value = markdownRef.current;
+    if (!value.trim() || lastSavedRef.current === value) return true;
+    return persist(value, { silent: true });
+  }, [persist]);
+
+  useEffect(() => {
+    return registerDocumentFlush(docTabId, flushLatest);
+  }, [docTabId, flushLatest]);
+
   // Flush pending edits when the tab closes / the window goes away. The store
   // action is called directly because component state is already unmounting.
   useEffect(() => {
     const flush = () => {
-      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-      const value = markdownRef.current;
-      if (readOnlyRef.current) return;
-      if (!value.trim() || lastSavedRef.current === value) return;
-      lastSavedRef.current = value;
-      void saveRef.current(bookId, value).catch((err) => {
-        console.warn("[DocumentWorkspace] Flush on close failed:", err);
-      });
+      void flushLatest();
     };
 
     const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") flush();
+      if (document.visibilityState === "hidden") {
+        flush();
+      } else if (lastSavedRef.current !== markdownRef.current) {
+        flush();
+      }
     };
     window.addEventListener("beforeunload", flush);
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -229,7 +246,7 @@ export function DocumentWorkspace({ bookId, tabId }: DocumentWorkspaceProps) {
       document.removeEventListener("visibilitychange", onVisibilityChange);
       flush();
     };
-  }, [bookId]);
+  }, [flushLatest]);
 
   // -------------------------------------------------------------------
   // Handlers
@@ -239,26 +256,40 @@ export function DocumentWorkspace({ bookId, tabId }: DocumentWorkspaceProps) {
     setMarkdown(value);
   }, []);
 
-  const handleSaveClick = useCallback(() => {
+  const confirmReaderRefresh = useCallback(() => {
+    if (!hasAnnotations) return true;
+    return window.confirm(
+      t(
+        "editor.annotationsMayShift",
+        "Saving regenerates this document’s EPUB. Existing highlights and notes may shift position. Continue?",
+      ),
+    );
+  }, [hasAnnotations, t]);
+
+  const handleSaveClick = useCallback(async () => {
+    if (!confirmReaderRefresh()) return;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
-    void persist(markdown);
-  }, [markdown, persist]);
+    await persist(markdown, { refreshReader: true });
+  }, [confirmReaderRefresh, markdown, persist]);
 
   const handleRead = useCallback(async () => {
+    if (!confirmReaderRefresh()) return;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
+    let saved = true;
     if (markdown.trim()) {
-      await persist(markdown);
+      saved = await persist(markdown, { refreshReader: true });
     }
+    if (!saved && markdown.trim()) return;
     const readerTabId = `reader-${bookId}`;
     addTab({ id: readerTabId, type: "reader", title: book?.meta.title ?? "", bookId });
     setActiveTab(readerTabId);
-  }, [addTab, setActiveTab, bookId, book?.meta.title, markdown, persist]);
+  }, [addTab, setActiveTab, bookId, book?.meta.title, confirmReaderRefresh, markdown, persist]);
 
   const switchMode = useCallback(() => {
     if (editorMode === "source") {

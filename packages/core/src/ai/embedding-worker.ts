@@ -5,6 +5,7 @@
  * Messages IN:
  *   { type: "load", modelId: string, hfModelId: string }
  *   { type: "embed", requestId: string, texts: string[] }
+ *   { type: "cancel", requestId: string }
  *   { type: "dispose" }
  *
  * Messages OUT:
@@ -18,6 +19,7 @@
 
 let pipeline: any = null;
 let currentModelId: string | null = null;
+const cancelledRequests = new Set<string>();
 
 self.onmessage = async (e: MessageEvent) => {
   const msg = e.data;
@@ -26,6 +28,8 @@ self.onmessage = async (e: MessageEvent) => {
     await handleLoad(msg.modelId, msg.hfModelId);
   } else if (msg.type === "embed") {
     await handleEmbed(msg.requestId, msg.texts);
+  } else if (msg.type === "cancel") {
+    cancelledRequests.add(msg.requestId);
   } else if (msg.type === "dispose") {
     await handleDispose();
   } else if (msg.type === "clearCache") {
@@ -86,7 +90,15 @@ async function handleEmbed(requestId: string, texts: string[]) {
     // Process texts one-by-one (Transformers.js doesn't truly batch in WASM)
     // but doing it in the Worker means it doesn't block the main thread
     for (let i = 0; i < total; i++) {
+      if (cancelledRequests.has(requestId)) {
+        cancelledRequests.delete(requestId);
+        return;
+      }
       const output = await pipeline(texts[i], { pooling: "mean", normalize: true });
+      if (cancelledRequests.has(requestId)) {
+        cancelledRequests.delete(requestId);
+        return;
+      }
       embeddings.push(Array.from(output.data as Float32Array).slice(0, output.dims[1]));
 
       // Report progress every item
@@ -95,7 +107,11 @@ async function handleEmbed(requestId: string, texts: string[]) {
       }
     }
 
-    self.postMessage({ type: "embed:done", requestId, embeddings });
+    if (!cancelledRequests.has(requestId)) {
+      self.postMessage({ type: "embed:done", requestId, embeddings });
+    } else {
+      cancelledRequests.delete(requestId);
+    }
   } catch (err) {
     self.postMessage({
       type: "embed:error",

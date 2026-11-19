@@ -56,6 +56,7 @@
     "errorNoAIConfig": "Configure an AI endpoint and model in Settings first.",
     "errorNoQuestions": "No material to build questions from. Make sure the book is vectorized and you have recent reading activity.",
     "errorGenerationFailed": "AI question generation failed. Please try again.",
+    "errorAnswerSaveFailed": "Failed to save your answer. Please retry before submitting.",
     "dailyInProgress": "Today's quiz is in progress — resume it.",
     "dailyInProgressShort": "In progress",
     "viewTodayReport": "View today's report",

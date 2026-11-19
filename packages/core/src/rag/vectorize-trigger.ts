@@ -6,6 +6,7 @@ import {
   insertChunks,
   setVectorIndexProvenance,
 } from "../db/database";
+import { runSerializedDbTask } from "../db/write-retry";
 import type { EmbeddingProvenance, VectorizeProgress } from "../types";
 /**
  * Vectorize Trigger — high-level service that orchestrates book vectorization.
@@ -26,6 +27,23 @@ import { getVectorDB, hasVectorDB } from "./vector-db";
 import type { VectorRecord } from "./vector-db";
 
 export type VectorizeStatusCallback = (progress: VectorizeProgress) => void;
+
+export interface VectorizeRunOptions {
+  signal?: AbortSignal;
+  /** Return false to suppress state updates from a superseded run. */
+  shouldUpdate?: () => boolean;
+}
+
+export function isVectorizeAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  const error = new Error("Vectorization was cancelled.");
+  error.name = "AbortError";
+  throw error;
+}
 
 /** Configuration describing the vector model to use */
 export interface VectorizeTriggerConfig {
@@ -79,7 +97,14 @@ export async function triggerVectorizeBook(
   config: VectorizeTriggerConfig,
   callbacks: VectorizeTriggerCallbacks,
   onProgress?: VectorizeStatusCallback,
+  options?: VectorizeRunOptions,
 ): Promise<void> {
+  const signal = options?.signal;
+  throwIfAborted(signal);
+  const updateBook = (update: { isVectorized: boolean; vectorizeProgress: number }) => {
+    if (options?.shouldUpdate && !options.shouldUpdate()) return;
+    callbacks.onBookUpdate(bookId, update);
+  };
   if (!config.vectorModelEnabled) {
     throw new Error("Vector model is not enabled. Please enable it in Settings → Vector Model.");
   }
@@ -97,7 +122,7 @@ export async function triggerVectorizeBook(
 
   try {
     // Update book state: vectorizing
-    callbacks.onBookUpdate(bookId, {
+    updateBook({
       isVectorized: false,
       vectorizeProgress: 0,
     });
@@ -121,6 +146,7 @@ export async function triggerVectorizeBook(
 
     const totalChapters = chapters.length;
     for (let i = 0; i < chapters.length; i++) {
+      throwIfAborted(signal);
       const chapter = chapters[i];
       const chunks = chunkContent(
         chapter.content,
@@ -139,6 +165,7 @@ export async function triggerVectorizeBook(
       progress.totalChunks = totalChapters;
       onProgress?.(progress);
       await yieldToUI();
+      throwIfAborted(signal);
     }
 
     if (allChunks.length === 0) {
@@ -158,81 +185,96 @@ export async function triggerVectorizeBook(
         config.selectedBuiltinModelId,
         progress,
         onProgress,
+        signal,
       );
     } else {
-      await generateRemoteEmbeddings(allChunks, config, progress, onProgress);
+      await generateRemoteEmbeddings(allChunks, config, progress, onProgress, signal);
     }
+
+    throwIfAborted(signal);
 
     // Phase 3: Store in database (batch insert for performance)
     progress.status = "indexing";
     onProgress?.(progress);
     await yieldToUI();
 
-    await deleteChunks(bookId);
-    await deleteVectorIndexProvenance(bookId);
-    // Insert in batches of 50 to avoid huge single transaction
-    const insertBatchSize = 50;
-    for (let i = 0; i < allChunks.length; i += insertBatchSize) {
-      await insertChunks(allChunks.slice(i, i + insertBatchSize));
-    }
+    await runSerializedDbTask(async () => {
+      throwIfAborted(signal);
+      await deleteChunks(bookId);
+      await deleteVectorIndexProvenance(bookId);
+      throwIfAborted(signal);
 
-    // Store embeddings in vector database (sqlite-vec)
-    if (hasVectorDB()) {
-      try {
-        const vectorDB = getVectorDB();
-        if (vectorDB && (await vectorDB.isReady())) {
-          await vectorDB.deleteByBookId(bookId);
-
-          const vectorRecords: VectorRecord[] = allChunks.flatMap((c) => {
-            const embedding = c.embedding;
-            if (!embedding || embedding.length === 0) return [];
-            return [
-              {
-                id: c.id,
-                bookId: c.bookId,
-                embedding,
-              },
-            ];
-          });
-
-          let storedInVectorDb = false;
-          if (vectorRecords.length > 0) {
-            // Detect actual embedding dimension and reinit vector DB if needed
-            const detectedDimension = vectorRecords[0].embedding.length;
-            const stats = await vectorDB.getStats();
-            let canInsertIntoVectorDb = canStoreInSharedVectorDB(stats, detectedDimension);
-            if (detectedDimension > 0 && vectorDB.reinit && stats.totalVectors === 0) {
-              await vectorDB.reinit(detectedDimension);
-              canInsertIntoVectorDb = true;
-            } else if (stats.dimension !== detectedDimension) {
-              // sqlite-vec currently has one global vector dimension. Never drop
-              // other books' acceleration indexes just to insert this one: search
-              // will safely use the persisted chunk embeddings for this book.
-              console.warn(
-                `[Vectorize] Skipping sqlite-vec insert for ${bookId}: ${detectedDimension}d index is incompatible with existing ${stats.dimension}d database.`,
-              );
-            }
-            if (canInsertIntoVectorDb) {
-              await vectorDB.insert(vectorRecords);
-              storedInVectorDb = true;
-            }
-          }
-
-          console.log(
-            storedInVectorDb
-              ? `[Vectorize] Stored ${vectorRecords.length} vectors in sqlite-vec`
-              : `[Vectorize] Persisted ${vectorRecords.length} vectors in chunk storage only`,
-          );
-        } else {
-          console.warn("[Vectorize] Vector database not ready, skipping vector storage");
-        }
-      } catch (err) {
-        console.error("[Vectorize] Failed to store vectors:", err);
+      // Insert in batches of 50 to avoid huge single transaction.
+      const insertBatchSize = 50;
+      for (let i = 0; i < allChunks.length; i += insertBatchSize) {
+        throwIfAborted(signal);
+        await insertChunks(allChunks.slice(i, i + insertBatchSize));
       }
-    }
 
-    const provenance = getEmbeddingProvenance(config, allChunks[0]?.embedding?.length ?? 0);
-    await setVectorIndexProvenance({ bookId, ...provenance, createdAt: Date.now() });
+      // Store embeddings in vector database (sqlite-vec)
+      if (hasVectorDB()) {
+        try {
+          const vectorDB = getVectorDB();
+          if (vectorDB && (await vectorDB.isReady())) {
+            throwIfAborted(signal);
+            await vectorDB.deleteByBookId(bookId);
+
+            const vectorRecords: VectorRecord[] = allChunks.flatMap((c) => {
+              const embedding = c.embedding;
+              if (!embedding || embedding.length === 0) return [];
+              return [
+                {
+                  id: c.id,
+                  bookId: c.bookId,
+                  embedding,
+                },
+              ];
+            });
+
+            let storedInVectorDb = false;
+            if (vectorRecords.length > 0) {
+              // Detect actual embedding dimension and reinit vector DB if needed
+              const detectedDimension = vectorRecords[0].embedding.length;
+              const stats = await vectorDB.getStats();
+              let canInsertIntoVectorDb = canStoreInSharedVectorDB(stats, detectedDimension);
+              if (detectedDimension > 0 && vectorDB.reinit && stats.totalVectors === 0) {
+                await vectorDB.reinit(detectedDimension);
+                canInsertIntoVectorDb = true;
+              } else if (stats.dimension !== detectedDimension) {
+                // sqlite-vec currently has one global vector dimension. Never drop
+                // other books' acceleration indexes just to insert this one: search
+                // will safely use the persisted chunk embeddings for this book.
+                console.warn(
+                  `[Vectorize] Skipping sqlite-vec insert for ${bookId}: ${detectedDimension}d index is incompatible with existing ${stats.dimension}d database.`,
+                );
+              }
+              if (canInsertIntoVectorDb) {
+                throwIfAborted(signal);
+                await vectorDB.insert(vectorRecords);
+                storedInVectorDb = true;
+              }
+            }
+
+            console.log(
+              storedInVectorDb
+                ? `[Vectorize] Stored ${vectorRecords.length} vectors in sqlite-vec`
+                : `[Vectorize] Persisted ${vectorRecords.length} vectors in chunk storage only`,
+            );
+          } else {
+            console.warn("[Vectorize] Vector database not ready, skipping vector storage");
+          }
+        } catch (err) {
+          if (isVectorizeAbortError(err)) throw err;
+          console.error("[Vectorize] Failed to store vectors:", err);
+        }
+      }
+
+      throwIfAborted(signal);
+      const provenance = getEmbeddingProvenance(config, allChunks[0]?.embedding?.length ?? 0);
+      await setVectorIndexProvenance({ bookId, ...provenance, createdAt: Date.now() });
+    });
+
+    throwIfAborted(signal);
 
     // Invalidate search cache so next query picks up new embeddings
     invalidateChunkCache(bookId);
@@ -241,7 +283,8 @@ export async function triggerVectorizeBook(
     progress.status = "completed";
     onProgress?.(progress);
 
-    callbacks.onBookUpdate(bookId, {
+    throwIfAborted(signal);
+    updateBook({
       isVectorized: true,
       vectorizeProgress: 1,
     });
@@ -250,12 +293,17 @@ export async function triggerVectorizeBook(
       chunksCount: allChunks.length,
     });
   } catch (err) {
+    if (isVectorizeAbortError(err)) {
+      progress.status = "cancelled";
+      onProgress?.(progress);
+      throw err;
+    }
     const message = err instanceof Error ? err.message : String(err);
     progress.status = "error";
     progress.error = message;
     onProgress?.(progress);
 
-    callbacks.onBookUpdate(bookId, {
+    updateBook({
       isVectorized: false,
       vectorizeProgress: 0,
     });
@@ -269,12 +317,15 @@ function getEmbeddingProvenance(
   actualDimensions: number,
 ): EmbeddingProvenance {
   if (config.vectorModelMode === "builtin") {
-    const model = BUILTIN_EMBEDDING_MODELS.find((candidate) => candidate.id === config.selectedBuiltinModelId);
+    const model = BUILTIN_EMBEDDING_MODELS.find(
+      (candidate) => candidate.id === config.selectedBuiltinModelId,
+    );
     if (!model) throw new Error("Cannot save provenance for an unknown built-in embedding model.");
     return { kind: "builtin", modelId: model.id, dimensions: actualDimensions || model.dimension };
   }
 
-  if (!config.remoteModel) throw new Error("Cannot save provenance without a selected remote embedding model.");
+  if (!config.remoteModel)
+    throw new Error("Cannot save provenance without a selected remote embedding model.");
   return {
     kind: "remote",
     modelId: config.remoteModel.modelId,
@@ -289,7 +340,9 @@ async function generateBuiltinEmbeddings(
   builtinModelId: string | null,
   progress: VectorizeProgress,
   onProgress?: VectorizeStatusCallback,
+  signal?: AbortSignal,
 ) {
+  throwIfAborted(signal);
   if (!builtinModelId) {
     throw new Error("No built-in model selected. Please select one in Settings → Vector Model.");
   }
@@ -299,27 +352,35 @@ async function generateBuiltinEmbeddings(
 
   // Ensure the model is loaded in the Worker
   await loadEmbeddingPipeline(builtinModelId);
+  throwIfAborted(signal);
 
   // Process in batches — Worker handles the heavy lifting off main thread
   const batchSize = 16;
   let globalProcessed = 0;
 
   for (let i = 0; i < chunks.length; i += batchSize) {
+    throwIfAborted(signal);
     const batch = chunks.slice(i, i + batchSize);
     const texts = batch.map((c) => c.content);
     const batchOffset = i;
 
     // generateLocalEmbeddings now runs in Worker with per-item progress
-    const embeddings = await generateLocalEmbeddings(builtinModelId, texts, (done, _total) => {
-      globalProcessed = batchOffset + done;
-      progress.processedChunks = globalProcessed;
-      eventBus.emit("vectorize:progress", {
-        bookId: progress.bookId,
-        progress: globalProcessed / progress.totalChunks,
-        status: "embedding",
-      });
-      onProgress?.(progress);
-    });
+    const embeddings = await generateLocalEmbeddings(
+      builtinModelId,
+      texts,
+      (done, _total) => {
+        globalProcessed = batchOffset + done;
+        progress.processedChunks = globalProcessed;
+        eventBus.emit("vectorize:progress", {
+          bookId: progress.bookId,
+          progress: globalProcessed / progress.totalChunks,
+          status: "embedding",
+        });
+        onProgress?.(progress);
+      },
+      { signal },
+    );
+    throwIfAborted(signal);
 
     for (let j = 0; j < batch.length; j++) {
       batch[j].embedding = embeddings[j];
@@ -335,7 +396,9 @@ async function generateRemoteEmbeddings(
   config: VectorizeTriggerConfig,
   progress: VectorizeProgress,
   onProgress?: VectorizeStatusCallback,
+  signal?: AbortSignal,
 ) {
+  throwIfAborted(signal);
   const selectedModel = config.remoteModel;
   if (!selectedModel) {
     throw new Error(
@@ -357,14 +420,17 @@ async function generateRemoteEmbeddings(
   > => {
     return requestRemoteEmbeddingBatch(selectedModel, inputTexts, {
       maxCharsPerInput: MAX_CHARS_PER_CHUNK,
+      signal,
     });
   };
 
   for (let i = 0; i < chunks.length; i += batchSize) {
+    throwIfAborted(signal);
     const batch = chunks.slice(i, i + batchSize);
     const texts = batch.map((c) => c.content);
 
     const batchResult = await callEmbeddingApi(texts);
+    throwIfAborted(signal);
 
     if (batchResult.ok) {
       for (let j = 0; j < batch.length; j++) {
@@ -382,7 +448,9 @@ async function generateRemoteEmbeddings(
           `[Embedding] Batch failed (${batchResult.status}): ${batchResult.errorText.slice(0, 200)}. Retrying per-chunk.`,
         );
         for (let j = 0; j < batch.length; j++) {
+          throwIfAborted(signal);
           const single = await callEmbeddingApi([batch[j].content]);
+          throwIfAborted(signal);
           if (single.ok) {
             batch[j].embedding = single.embeddings[0] ?? [];
           } else {

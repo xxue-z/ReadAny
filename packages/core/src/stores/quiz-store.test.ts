@@ -8,12 +8,26 @@ import type { AIConfig, QuizConfig, QuizQuestion } from "../types";
 const mem = vi.hoisted(() => {
   const sessions = new Map<string, any>();
   const questions = new Map<string, any>();
+  let writeGate: Promise<void> | null = null;
+  let writeError: Error | null = null;
   return {
     sessions,
     questions,
+    setWriteGate(gate: Promise<void> | null) {
+      writeGate = gate;
+    },
+    setWriteError(error: Error | null) {
+      writeError = error;
+    },
+    async waitForWrite() {
+      if (writeGate) await writeGate;
+      if (writeError) throw writeError;
+    },
     reset() {
       sessions.clear();
       questions.clear();
+      writeGate = null;
+      writeError = null;
     },
   };
 });
@@ -41,6 +55,7 @@ vi.mock("../db/quiz-queries", () => ({
     mem.sessions.set(id, { ...mem.sessions.get(id), ...updates });
   },
   updateQuizQuestion: async (id: string, updates: any) => {
+    await mem.waitForWrite();
     mem.questions.set(id, { ...mem.questions.get(id), ...updates });
   },
   insertQuestionBankEntry: async () => {},
@@ -90,7 +105,7 @@ vi.mock("../quiz/report-builder", () => ({
   },
 }));
 
-import { QuizGenerationError, useQuizStore } from "./quiz-store";
+import { QuizAnswerPersistenceError, QuizGenerationError, useQuizStore } from "./quiz-store";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -290,9 +305,79 @@ describe("generation cancellation", () => {
     expect(useQuizStore.getState().currentSession).toBeNull();
     expect(useQuizStore.getState().isTaking).toBe(false);
   });
+
+  it("does not let a cancelled generation overwrite the next one", async () => {
+    let releaseFirst: () => void = () => {};
+    gen.gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const first = useQuizStore.getState().startQuiz(config, aiConfig);
+
+    useQuizStore.getState().cancelGeneration();
+    gen.gate = null;
+    gen.questions = [makeQuestion({ id: "second-quiz" })];
+    const second = useQuizStore.getState().startQuiz(config, aiConfig);
+
+    releaseFirst();
+    await first;
+    await second;
+
+    expect(useQuizStore.getState().isGenerating).toBe(false);
+    expect(useQuizStore.getState().currentQuestions[0]?.id).toBe("second-quiz");
+    expect(mem.sessions.size).toBe(1);
+  });
 });
 
 describe("completion and reset", () => {
+  it("waits for a pending answer write before building the report", async () => {
+    gen.questions = [makeQuestion({ id: "gen-1" })];
+    await useQuizStore.getState().startQuiz(config, aiConfig);
+
+    let releaseWrite: () => void = () => {};
+    mem.setWriteGate(
+      new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      }),
+    );
+
+    void useQuizStore.getState().submitAnswer("gen-1", "A");
+    const completing = useQuizStore.getState().completeQuiz();
+    await Promise.resolve();
+    releaseWrite();
+    await completing;
+
+    const state = useQuizStore.getState();
+    expect(state.report?.summary.correctRate).toBe(1);
+    expect(state.report?.questions[0]?.userAnswer).toBe("A");
+    expect(state.currentSession?.score).toBe(100);
+  });
+
+  it("refuses to grade from stale rows when the answer write fails", async () => {
+    gen.questions = [makeQuestion({ id: "gen-1" })];
+    await useQuizStore.getState().startQuiz(config, aiConfig);
+    mem.setWriteError(new Error("disk full"));
+
+    void useQuizStore.getState().submitAnswer("gen-1", "A");
+
+    await expect(useQuizStore.getState().completeQuiz()).rejects.toBeInstanceOf(
+      QuizAnswerPersistenceError,
+    );
+    expect(useQuizStore.getState().currentQuestions[0]?.userAnswer).toBeUndefined();
+    expect(useQuizStore.getState().currentSession?.status).toBe("in_progress");
+    expect(useQuizStore.getState().report).toBeNull();
+    await expect(useQuizStore.getState().completeQuiz()).rejects.toBeInstanceOf(
+      QuizAnswerPersistenceError,
+    );
+    expect(mem.sessions.get(useQuizStore.getState().currentSession?.id ?? "")?.status).toBe(
+      "in_progress",
+    );
+
+    mem.setWriteError(null);
+    await useQuizStore.getState().submitAnswer("gen-1", "A");
+    await useQuizStore.getState().completeQuiz();
+    expect(useQuizStore.getState().currentSession?.score).toBe(100);
+  });
+
   it("builds the report, grades the session, and can return to setup", async () => {
     gen.questions = [makeQuestion({ id: "gen-1" })];
     await useQuizStore.getState().startQuiz(config, aiConfig);

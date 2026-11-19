@@ -14,6 +14,7 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import type { RouteProp } from "@react-navigation/native";
 import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { getQuizSession } from "@readany/core/db/quiz-queries";
+import { formatQuizAnswer } from "@readany/core/quiz/quiz-helpers";
 import { buildQuizReport } from "@readany/core/quiz/report-builder";
 import { useQuizStore } from "@readany/core/stores/quiz-store";
 import { useSettingsStore } from "@readany/core/stores/settings-store";
@@ -352,9 +353,10 @@ export default function QuizReportScreen() {
               {q.isCorrect === false && (
                 <Text style={s.reviewCorrect}>
                   {t("quiz.correctAnswer", "Correct answer")}:{" "}
-                  {Array.isArray(q.answer.correct)
-                    ? q.answer.correct.join(", ")
-                    : String(q.answer.correct)}
+                  {formatQuizAnswer(q, {
+                    trueLabel: t("quiz.trueLabel", "True"),
+                    falseLabel: t("quiz.falseLabel", "False"),
+                  })}
                 </Text>
               )}
             </View>

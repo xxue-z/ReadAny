@@ -396,44 +396,32 @@ export function LibraryScreen() {
     if (localImportInFlightRef.current) return;
     localImportInFlightRef.current = true;
     setIsPickingImport(true);
-    let result: DocumentPicker.DocumentPickerResult | null = null;
 
     try {
       // Ask for "*/*" instead of a MIME whitelist: `.md` maps to text/markdown,
       // which older pickers report as text/plain or octet-stream, and long
       // MIME lists get truncated by iOS / rejected by Android. Supported
       // extensions are validated below instead.
-      result = await DocumentPicker.getDocumentAsync({
+      const result = await DocumentPicker.getDocumentAsync({
         type: ["*/*"],
         multiple: true,
         copyToCacheDirectory: true,
       });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (!message.includes("Different document picking in progress")) {
-        console.error("Import failed:", err);
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+
+      const files = result.assets.map((a) => ({ uri: a.uri, name: a.name }));
+      const supported = files.filter((file) => isSupportedBookExtension(file.name || file.uri));
+      if (supported.length === 0) {
+        Alert.alert(
+          t("library.importUnsupportedTitle", "不支持的文件类型"),
+          t(
+            "library.importUnsupportedMessage",
+            "请选择 EPUB、PDF、MOBI、AZW3、CBZ、FB2、TXT、UMD 或 Markdown（.md）文件。",
+          ),
+        );
+        return;
       }
-    } finally {
-      localImportInFlightRef.current = false;
-      setIsPickingImport(false);
-    }
 
-    if (!result || result.canceled || !result.assets || result.assets.length === 0) return;
-
-    const files = result.assets.map((a) => ({ uri: a.uri, name: a.name }));
-    const supported = files.filter((file) => isSupportedBookExtension(file.name || file.uri));
-    if (supported.length === 0) {
-      Alert.alert(
-        t("library.importUnsupportedTitle", "不支持的文件类型"),
-        t(
-          "library.importUnsupportedMessage",
-          "请选择 EPUB、PDF、MOBI、AZW3、CBZ、FB2、TXT、UMD 或 Markdown（.md）文件。",
-        ),
-      );
-      return;
-    }
-
-    try {
       const summary = await importBooks(supported);
       Alert.alert(
         t("common.success", "成功！"),
@@ -444,7 +432,17 @@ export function LibraryScreen() {
         }),
       );
     } catch (err) {
-      console.error("Import failed:", err);
+      const message = err instanceof Error ? err.message : String(err);
+      if (!message.includes("Different document picking in progress")) {
+        console.error("Import failed:", err);
+        Alert.alert(
+          t("library.importFailedTitle", "导入失败"),
+          t("library.importFailedMessage", "无法导入所选文件，请重试。"),
+        );
+      }
+    } finally {
+      localImportInFlightRef.current = false;
+      setIsPickingImport(false);
     }
   }, [importBooks, t]);
 

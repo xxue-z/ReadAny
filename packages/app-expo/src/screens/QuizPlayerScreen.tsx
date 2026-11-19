@@ -7,6 +7,7 @@ import {
   OctagonXIcon,
 } from "@/components/ui/Icon";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
+import { getQuizFailureMessage } from "@/lib/quiz/quiz-error";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
 import { type ThemeColors, fontSize, fontWeight, radius, useColors } from "@/styles/theme";
 import { useIsFocused, useNavigation, useRoute } from "@react-navigation/native";
@@ -19,8 +20,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   ActivityIndicator,
-  AppState,
   Alert,
+  AppState,
   ScrollView,
   type StyleProp,
   StyleSheet,
@@ -219,6 +220,7 @@ export default function QuizPlayerScreen() {
                 nav.replace("QuizReport", { sessionId });
               } catch (err) {
                 console.error("[QuizPlayer] completeQuiz:", err);
+                Alert.alert(t("quiz.errorTitle", "Error"), getQuizFailureMessage(err, t));
               } finally {
                 setSubmitting(false);
               }
@@ -235,10 +237,7 @@ export default function QuizPlayerScreen() {
       nav.replace("QuizReport", { sessionId });
     } catch (err) {
       console.error("[QuizPlayer] completeQuiz:", err);
-      Alert.alert(
-        t("quiz.errorTitle", "Error"),
-        t("quiz.submitFailed", "Failed to submit the quiz."),
-      );
+      Alert.alert(t("quiz.errorTitle", "Error"), getQuizFailureMessage(err, t));
     } finally {
       setSubmitting(false);
     }

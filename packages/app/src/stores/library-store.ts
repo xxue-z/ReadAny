@@ -11,10 +11,14 @@ import {
   createImportDuplicateIndex,
   findDuplicateBookByHash,
 } from "@readany/core";
+import { PerBookReindexCoordinator, isVectorizeAbortError } from "@readany/core/rag";
 import { debouncedSave, loadFromFS } from "@readany/core/stores/persist";
 import { useVectorModelStore } from "@readany/core/stores/vector-model-store";
 import type { Book, BookGroup, LibraryFilter, SortField, SortOrder } from "@readany/core/types";
 import { create } from "zustand";
+
+const documentReindex = new PerBookReindexCoordinator();
+const reindexDesired = new Set<string>();
 
 interface EpubMeta {
   title: string;
@@ -383,7 +387,11 @@ export interface LibraryState {
   addTagToBook: (bookId: string, tag: string) => void;
   removeTagFromBook: (bookId: string, tag: string) => void;
   createDocument: (title?: string) => Promise<Book | null>;
-  saveDocument: (bookId: string, markdown: string) => Promise<void>;
+  saveDocument: (
+    bookId: string,
+    markdown: string,
+    options?: { refreshReader?: boolean },
+  ) => Promise<void>;
 }
 
 async function restoreDeletedDesktopBook(bookId: string, filePath: string): Promise<Book | null> {
@@ -1501,7 +1509,7 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     return book;
   },
 
-  saveDocument: async (bookId, markdown) => {
+  saveDocument: async (bookId, markdown, options) => {
     const { MdToEpubConverter } = await import("@readany/core/utils/md-to-epub");
     const { writeFile, mkdir, readFile } = await import("@tauri-apps/plugin-fs");
     const { join } = await import("@tauri-apps/api/path");
@@ -1539,26 +1547,64 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     if (!book) return;
 
     const titleChanged = result.bookTitle !== book.meta.title;
-    const wasVectorized = !!book.isVectorized;
+    const shouldReindex =
+      !!book.isVectorized || documentReindex.isRunning(bookId) || reindexDesired.has(bookId);
+    const vmState = useVectorModelStore.getState();
+    const canReindex = vmState.vectorModelEnabled && vmState.hasVectorCapability();
     await get().updateBook(bookId, {
       // Always bump updatedAt so "recently updated" sorting and sync see the edit.
       updatedAt: Date.now(),
       ...(titleChanged ? { meta: { ...book.meta, title: result.bookTitle } } : {}),
       // The RAG index describes the previous text; force a re-index.
-      ...(wasVectorized ? { isVectorized: false, vectorizeProgress: 0 } : {}),
+      ...(shouldReindex ? { isVectorized: false, vectorizeProgress: 0 } : {}),
     });
 
-    // Let any open reader tab reload the regenerated EPUB.
-    const { refreshReaderForBook } = await import("@/lib/reader/refresh-open-reader");
-    refreshReaderForBook(bookId, book.filePath);
-
-    if (wasVectorized && book.filePath) {
-      triggerVectorizeBook(bookId, book.filePath, (progress) => {
-        const pct = progress.totalChunks > 0 ? progress.processedChunks / progress.totalChunks : 0;
-        get().updateBook(bookId, { vectorizeProgress: pct });
-      })
-        .then(() => get().updateBook(bookId, { isVectorized: true, vectorizeProgress: 1 }))
-        .catch((err) => console.warn("[Library] Re-vectorize after save failed:", err));
+    // Autosave refreshes the file but must not remount an open reader. Explicit
+    // save/read callers opt in after warning about annotation re-anchoring.
+    if (options?.refreshReader) {
+      const { refreshReaderForBook } = await import("@/lib/reader/refresh-open-reader");
+      refreshReaderForBook(bookId, book.filePath);
     }
+
+    const filePath = book.filePath;
+    if (!shouldReindex || !filePath) return;
+    if (!canReindex) {
+      documentReindex.cancel(bookId);
+      reindexDesired.delete(bookId);
+      return;
+    }
+
+    reindexDesired.add(bookId);
+    void documentReindex
+      .schedule(bookId, async (context) => {
+        try {
+          await triggerVectorizeBook(
+            bookId,
+            filePath,
+            (progress) => {
+              if (!context.isCurrent()) return;
+              const pct =
+                progress.totalChunks > 0 ? progress.processedChunks / progress.totalChunks : 0;
+              void get().updateBook(bookId, { vectorizeProgress: pct });
+            },
+            { signal: context.signal, shouldUpdate: context.isCurrent },
+          );
+          if (!context.isCurrent()) return;
+          reindexDesired.delete(bookId);
+          await get().updateBook(bookId, { isVectorized: true, vectorizeProgress: 1 });
+        } catch (err) {
+          if (isVectorizeAbortError(err) || !context.isCurrent()) return;
+          reindexDesired.add(bookId);
+          console.warn("[Library] Re-vectorize after save failed:", err);
+          await get()
+            .updateBook(bookId, { isVectorized: false, vectorizeProgress: 0 })
+            .catch(() => undefined);
+        }
+      })
+      .catch((err) => {
+        if (!isVectorizeAbortError(err)) {
+          console.warn("[Library] Re-index task failed:", err);
+        }
+      });
   },
 }));

@@ -7,9 +7,18 @@ import { BUILTIN_EMBEDDING_MODELS } from "./builtin-embedding-models";
 export interface ILocalEmbeddingEngine {
   init(): void | Promise<void>;
   load(modelId: string, hfModelId: string, onProgress?: (p: number) => void): Promise<void>;
-  generate(modelId: string, texts: string[], onItemProgress?: (done: number, total: number) => void): Promise<number[][]>;
+  generate(
+    modelId: string,
+    texts: string[],
+    onItemProgress?: (done: number, total: number) => void,
+    options?: EmbeddingGenerateOptions,
+  ): Promise<number[][]>;
   dispose(): Promise<void>;
   clearCache(hfModelId: string): Promise<void>;
+}
+
+export interface EmbeddingGenerateOptions {
+  signal?: AbortSignal;
 }
 
 let activeEngine: ILocalEmbeddingEngine | null = null;
@@ -22,7 +31,9 @@ export function setLocalEmbeddingEngine(engine: ILocalEmbeddingEngine) {
 
 function getEngine(): ILocalEmbeddingEngine {
   if (!activeEngine) {
-    throw new Error("Local embedding engine not set. Call setLocalEmbeddingEngine() early in your app lifecycle.");
+    throw new Error(
+      "Local embedding engine not set. Call setLocalEmbeddingEngine() early in your app lifecycle.",
+    );
   }
   return activeEngine;
 }
@@ -45,8 +56,15 @@ export function generateLocalEmbeddings(
   builtinModelId: string,
   texts: string[],
   onItemProgress?: (done: number, total: number) => void,
+  options?: EmbeddingGenerateOptions,
 ): Promise<number[][]> {
-  return getEngine().generate(builtinModelId, texts, onItemProgress);
+  return getEngine().generate(builtinModelId, texts, onItemProgress, options);
+}
+
+export function createEmbeddingAbortError(): Error {
+  const error = new Error("Embedding generation was cancelled.");
+  error.name = "AbortError";
+  return error;
 }
 
 export async function disposeEmbeddingPipeline(): Promise<void> {
@@ -109,23 +127,46 @@ export class WebWorkerEmbeddingEngine implements ILocalEmbeddingEngine {
     });
   }
 
-  generate(_modelId: string, texts: string[], onItemProgress?: (done: number, total: number) => void): Promise<number[][]> {
+  generate(
+    _modelId: string,
+    texts: string[],
+    onItemProgress?: (done: number, total: number) => void,
+    options?: EmbeddingGenerateOptions,
+  ): Promise<number[][]> {
+    if (options?.signal?.aborted) return Promise.reject(createEmbeddingAbortError());
     return new Promise((resolve, reject) => {
       const w = this.getWorker();
       const reqId = `req-${++this.requestCounter}`;
+      let settled = false;
+      const cleanup = () => {
+        w.removeEventListener("message", handler);
+        options?.signal?.removeEventListener("abort", onAbort);
+      };
       const handler = (e: MessageEvent) => {
         const msg = e.data;
         if (msg.requestId !== reqId) return;
         if (msg.type === "embed:progress") onItemProgress?.(msg.done, msg.total);
         else if (msg.type === "embed:done") {
-          w.removeEventListener("message", handler);
+          if (settled) return;
+          settled = true;
+          cleanup();
           resolve(msg.embeddings);
         } else if (msg.type === "embed:error") {
-          w.removeEventListener("message", handler);
+          if (settled) return;
+          settled = true;
+          cleanup();
           reject(new Error(msg.error));
         }
       };
+      const onAbort = () => {
+        if (settled) return;
+        settled = true;
+        w.postMessage({ type: "cancel", requestId: reqId });
+        cleanup();
+        reject(createEmbeddingAbortError());
+      };
       w.addEventListener("message", handler);
+      options?.signal?.addEventListener("abort", onAbort, { once: true });
       w.postMessage({ type: "embed", requestId: reqId, texts });
     });
   }

@@ -22,7 +22,6 @@ import { EpubDraftWorkspace } from "@/components/epub-draft/EpubDraftWorkspace";
 import { HomePage } from "@/components/home/HomePage";
 import { NotesPage } from "@/components/notes/NotesPage";
 import { OnboardingModal } from "@/components/onboarding/OnboardingModal";
-import { QuizPage } from "@/components/quiz/QuizPage";
 import { ReaderView, evictBlobCache } from "@/components/reader/ReaderView";
 import { SettingsDialog } from "@/components/settings/SettingsDialog";
 import { MissingBookPromptDialog } from "@/components/shared/MissingBookPromptDialog";
@@ -36,10 +35,14 @@ import { useReaderStore } from "@/stores/reader-store";
 import { useFontStore } from "@readany/core/stores";
 import { useSettingsStore } from "@readany/core/stores/settings-store";
 import { BookOpen } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { HomeSidebar } from "./Sidebar";
 import { TabBar } from "./TabBar";
+
+const LazyQuizPage = lazy(() =>
+  import("@/components/quiz/QuizPage").then((module) => ({ default: module.QuizPage })),
+);
 
 /** All home sub-views — each stays mounted and uses display:none to toggle. */
 const HOME_VIEWS: { id: string; Component: React.ComponentType }[] = [
@@ -47,7 +50,7 @@ const HOME_VIEWS: { id: string; Component: React.ComponentType }[] = [
   { id: "chat", Component: ChatPageComponent },
   { id: "notes", Component: NotesPage },
   { id: "skills", Component: SkillsPage },
-  { id: "quiz", Component: QuizPage },
+  { id: "quiz", Component: LazyQuizPage },
   { id: "stats", Component: ReadingStatsPanel },
 ];
 
@@ -242,6 +245,14 @@ export function AppLayout() {
 
   // Determine which home sub-view is active
   const homeViewKey = isReaderActive || isWorkspaceActive ? null : (activeTabId ?? "home");
+  const [visitedHomeViews, setVisitedHomeViews] = useState<Set<string>>(() => new Set(["home"]));
+
+  useEffect(() => {
+    if (!homeViewKey) return;
+    setVisitedHomeViews((previous) =>
+      previous.has(homeViewKey) ? previous : new Set(previous).add(homeViewKey),
+    );
+  }, [homeViewKey]);
 
   // Track which reader tabs we've already initialized
   const initializedRef = useRef<Set<string>>(new Set());
@@ -362,15 +373,28 @@ export function AppLayout() {
           <div className="min-h-0 flex-1 overflow-hidden pr-1 pb-1">
             <div className="relative flex h-full flex-col overflow-hidden rounded-xl border bg-background shadow-around">
               {/* All home sub-views stay mounted; toggle via display:none */}
-              {HOME_VIEWS.map(({ id, Component }) => (
-                <div
-                  key={id}
-                  className="h-full w-full"
-                  style={{ display: homeViewKey === id ? "block" : "none" }}
-                >
-                  <Component />
-                </div>
-              ))}
+              {HOME_VIEWS.map(({ id, Component }) => {
+                const shouldMount = id !== "quiz" || visitedHomeViews.has("quiz");
+                return (
+                  <div
+                    key={id}
+                    className="h-full w-full"
+                    style={{ display: homeViewKey === id ? "block" : "none" }}
+                  >
+                    {shouldMount && (
+                      <Suspense
+                        fallback={
+                          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                            {t("common.loading", "Loading...")}
+                          </div>
+                        }
+                      >
+                        <Component />
+                      </Suspense>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

@@ -25,6 +25,11 @@ import {
   updateQuizSession,
 } from "../db/quiz-queries";
 import { generateQuizQuestions } from "../quiz/quiz-generator";
+import {
+  QuizAnswerPersistenceError,
+  QuizGenerationError,
+  type QuizGenerationErrorCode,
+} from "../quiz/quiz-helpers";
 import { buildQuizReport } from "../quiz/report-builder";
 import { answersEqual } from "../quiz/scoring";
 import type { AIConfig, QuizConfig, QuizQuestion, QuizReport, QuizSession } from "../types";
@@ -67,7 +72,7 @@ export interface QuizState {
   startQuiz: (config: QuizConfig, aiConfig: AIConfig) => Promise<void>;
 
   /** Record an answer for a specific question and auto-grade non-short_answer types. */
-  submitAnswer: (questionId: string, answer: string | string[]) => void;
+  submitAnswer: (questionId: string, answer: string | string[]) => Promise<void>;
 
   /** Finish the quiz: build a report, persist the final score, and stop taking. */
   completeQuiz: (timeSpentSeconds?: number) => Promise<void>;
@@ -91,22 +96,9 @@ export interface QuizState {
   loadSession: (id: string) => Promise<void>;
 }
 
-// ---------------------------------------------------------------------------
-// Errors
-// ---------------------------------------------------------------------------
-
-export type QuizGenerationErrorCode = "NO_AI_CONFIG" | "NO_QUESTIONS" | "GENERATION_FAILED";
-
-/** Typed failure so the UI can render a localized, actionable message. */
-export class QuizGenerationError extends Error {
-  readonly code: QuizGenerationErrorCode;
-
-  constructor(code: QuizGenerationErrorCode, message?: string) {
-    super(message ?? code);
-    this.name = "QuizGenerationError";
-    this.code = code;
-  }
-}
+// Keep the historical import path working for existing UI modules.
+export { QuizAnswerPersistenceError, QuizGenerationError };
+export type { QuizGenerationErrorCode };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -127,6 +119,26 @@ function autoGrade(question: QuizQuestion, userAnswer: string | string[]): boole
 
 /** In-flight generation, so `cancelGeneration` can abort the LLM request. */
 let activeGeneration: AbortController | null = null;
+let generationSequence = 0;
+
+/** Answer writes that must settle before a report may read the database. */
+const pendingAnswerWrites = new Map<string, Promise<void>>();
+
+async function flushPendingAnswerWrites(): Promise<void> {
+  const entries = [...pendingAnswerWrites.entries()];
+  for (const [questionId, write] of entries) {
+    try {
+      await write;
+    } catch (err) {
+      // Keep the failed entry until a successful retry replaces it. Otherwise
+      // a second Finish click could grade from rows that still lack the answer.
+      throw new QuizAnswerPersistenceError(questionId, err);
+    }
+    if (pendingAnswerWrites.get(questionId) === write) {
+      pendingAnswerWrites.delete(questionId);
+    }
+  }
+}
 
 export const useQuizStore = create<QuizState>((set, get) => ({
   sessions: [],
@@ -142,12 +154,18 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   // -------------------------------------------------------------------------
 
   startQuiz: async (config, aiConfig) => {
+    activeGeneration?.abort();
+    pendingAnswerWrites.clear();
+
     // Clear any previous report first: otherwise the report branch in QuizPage
     // keeps rendering the old report even after a new quiz has been generated.
     set({ isGenerating: true, report: null });
 
     const controller = new AbortController();
     activeGeneration = controller;
+    const generationId = ++generationSequence;
+    const isCurrentGeneration = () =>
+      activeGeneration === controller && generationSequence === generationId;
 
     try {
       if (!aiConfig?.activeEndpointId || !aiConfig.activeModel) {
@@ -159,6 +177,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
         questions = await generateQuizQuestions(config, aiConfig, { signal: controller.signal });
       } catch (err) {
         // A cancelled generation is not an error the user needs to see.
+        if (!isCurrentGeneration()) return;
         if (controller.signal.aborted) {
           set({ isGenerating: false });
           return;
@@ -167,6 +186,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
         throw new QuizGenerationError("GENERATION_FAILED");
       }
 
+      if (!isCurrentGeneration()) return;
       if (controller.signal.aborted) {
         set({ isGenerating: false });
         return;
@@ -196,9 +216,13 @@ export const useQuizStore = create<QuizState>((set, get) => ({
         createdAt: Date.now(),
       };
 
+      if (!isCurrentGeneration()) return;
+
       // Persist session + questions to DB.
       await insertQuizSession(session);
+      if (!isCurrentGeneration()) return;
       await insertQuizQuestions(sessionQuestions);
+      if (!isCurrentGeneration()) return;
 
       // Register the new questions in the question bank so the bank browser,
       // bank-ratio sampling and weak-area analysis have data to work with.
@@ -215,6 +239,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
         isTaking: true,
       });
     } catch (err) {
+      if (!isCurrentGeneration()) return;
       set({ isGenerating: false });
       throw err;
     } finally {
@@ -236,7 +261,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   // submitAnswer
   // -------------------------------------------------------------------------
 
-  submitAnswer: (questionId, answer) => {
+  submitAnswer: async (questionId, answer) => {
     const { currentQuestions } = get();
     const idx = currentQuestions.findIndex((q) => q.id === questionId);
     if (idx === -1) return;
@@ -254,16 +279,38 @@ export const useQuizStore = create<QuizState>((set, get) => ({
     const updatedQuestions = [...currentQuestions];
     updatedQuestions[idx] = updatedQuestion;
 
-    // Persist to DB (fire-and-forget — UI does not need to wait).
-    updateQuizQuestion(questionId, {
+    // Keep the optimistic UI update, but retain the write so completion can
+    // wait for it before building a report from the database.
+    const write = updateQuizQuestion(questionId, {
       userAnswer: answer,
       isCorrect: updatedQuestion.isCorrect,
-    }).catch((err) => console.error("[QuizStore] Failed to persist answer:", err));
+    });
+    pendingAnswerWrites.set(questionId, write);
+    void write
+      .then(() => {
+        if (pendingAnswerWrites.get(questionId) === write) {
+          pendingAnswerWrites.delete(questionId);
+        }
+      })
+      .catch((err) => {
+        // Re-open the question so the user can retry. Keep the rejected write
+        // registered so completion refuses to grade from stale DB rows.
+        const latest = get().currentQuestions.find((q) => q.id === questionId);
+        if (latest && JSON.stringify(latest.userAnswer) === JSON.stringify(answer)) {
+          set({
+            currentQuestions: get().currentQuestions.map((q) =>
+              q.id === questionId ? { ...q, userAnswer: undefined, isCorrect: undefined } : q,
+            ),
+          });
+        }
+        console.error("[QuizStore] Failed to persist answer:", err);
+      });
 
     // Do NOT auto-advance: the player must be able to show the correctness
     // verdict and the explanation for the question just answered. Navigation is
     // driven explicitly by the player (its own "next" control).
     set({ currentQuestions: updatedQuestions });
+    await write.catch(() => undefined);
   },
 
   // -------------------------------------------------------------------------
@@ -273,6 +320,10 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   completeQuiz: async (timeSpentSeconds) => {
     const { currentSession, currentQuestions } = get();
     if (!currentSession) return;
+
+    // A report reads fresh rows from the DB. Never let a just-submitted answer
+    // be counted as unanswered because its write is still in flight.
+    await flushPendingAnswerWrites();
 
     const timeSpent =
       typeof timeSpentSeconds === "number" && Number.isFinite(timeSpentSeconds)
@@ -327,6 +378,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   // -------------------------------------------------------------------------
 
   resetQuiz: () => {
+    pendingAnswerWrites.clear();
     set({
       currentSession: null,
       currentQuestions: [],
@@ -372,6 +424,7 @@ export const useQuizStore = create<QuizState>((set, get) => ({
   loadSession: async (id) => {
     const session = await getQuizSession(id);
     if (!session) return;
+    pendingAnswerWrites.clear();
 
     const questions = await getQuizQuestions(id);
 

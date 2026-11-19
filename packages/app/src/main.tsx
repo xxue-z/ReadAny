@@ -1,6 +1,6 @@
 import "./polyfills";
 import { i18nReady } from "@readany/core/i18n";
-import { initI18nLanguage } from "@readany/core/i18n";
+import i18n, { initI18nLanguage } from "@readany/core/i18n";
 /**
  * Entry point — mount React app + beforeunload protection
  */
@@ -22,6 +22,8 @@ import {
 import { setPlatformService } from "@readany/core/services";
 import { setTheme as setTauriTheme } from "@tauri-apps/api/app";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { toast } from "sonner";
+import { flushOpenDocuments } from "./lib/editor/document-save-registry";
 import { shouldSuppressNativeContextMenu } from "./lib/environment";
 import { TauriPlatformService } from "./lib/platform/tauri-platform-service";
 import { registerDesktopFallbackContentProvider } from "./lib/rag/fallback-content-provider";
@@ -159,6 +161,31 @@ i18nReady.then(() => {
   window.addEventListener("beforeunload", () => {
     flushAllWrites();
   });
+
+  if ("__TAURI_INTERNALS__" in window) {
+    void (async () => {
+      const { getCurrentWindow } = await import("@tauri-apps/api/window");
+      const appWindow = getCurrentWindow();
+      let bypassCloseGuard = false;
+      await appWindow.onCloseRequested(async (event) => {
+        if (bypassCloseGuard) return;
+        event.preventDefault();
+        const failed = await flushOpenDocuments();
+        if (failed.length > 0) {
+          toast.error(
+            i18n.t(
+              "editor.closeSaveFailed",
+              "Some documents could not be saved. The window was kept open.",
+            ),
+          );
+          return;
+        }
+        flushAllWrites();
+        bypassCloseGuard = true;
+        await appWindow.destroy();
+      });
+    })().catch((err) => console.warn("[App] Failed to install close guard:", err));
+  }
 
   // Initialize database and load books
   desktopDataRootReady.then(() => {

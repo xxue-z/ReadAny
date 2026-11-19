@@ -2,6 +2,7 @@ import { BookOpenIcon, CheckIcon, ChevronLeftIcon, EditIcon, EyeIcon } from "@/c
 import { KeyboardAwareScrollView } from "@/components/ui/KeyboardAwareScrollView";
 import { useResponsiveLayout } from "@/hooks/use-responsive-layout";
 import type { RootStackParamList } from "@/navigation/RootNavigator";
+import { useAnnotationStore } from "@/stores";
 import { useLibraryStore } from "@/stores/library-store";
 import {
   type ThemeColors,
@@ -58,12 +59,48 @@ function MarkdownPreview({ content, colors }: { content: string; colors: ThemeCo
         spacing: { xs: 2, s: 4, m: 8, l: 16 },
       }}
       styles={{
-        h1: { fontSize: 24, fontWeight: "700", color: colors.foreground, marginBottom: 12, marginTop: 20 },
-        h2: { fontSize: 20, fontWeight: "700", color: colors.foreground, marginBottom: 10, marginTop: 18 },
-        h3: { fontSize: 17, fontWeight: "600", color: colors.foreground, marginBottom: 8, marginTop: 14 },
-        h4: { fontSize: 16, fontWeight: "600", color: colors.foreground, marginBottom: 8, marginTop: 12 },
-        h5: { fontSize: 15, fontWeight: "600", color: colors.foreground, marginBottom: 6, marginTop: 12 },
-        h6: { fontSize: 14, fontWeight: "600", color: colors.foreground, marginBottom: 6, marginTop: 12 },
+        h1: {
+          fontSize: 24,
+          fontWeight: "700",
+          color: colors.foreground,
+          marginBottom: 12,
+          marginTop: 20,
+        },
+        h2: {
+          fontSize: 20,
+          fontWeight: "700",
+          color: colors.foreground,
+          marginBottom: 10,
+          marginTop: 18,
+        },
+        h3: {
+          fontSize: 17,
+          fontWeight: "600",
+          color: colors.foreground,
+          marginBottom: 8,
+          marginTop: 14,
+        },
+        h4: {
+          fontSize: 16,
+          fontWeight: "600",
+          color: colors.foreground,
+          marginBottom: 8,
+          marginTop: 12,
+        },
+        h5: {
+          fontSize: 15,
+          fontWeight: "600",
+          color: colors.foreground,
+          marginBottom: 6,
+          marginTop: 12,
+        },
+        h6: {
+          fontSize: 14,
+          fontWeight: "600",
+          color: colors.foreground,
+          marginBottom: 6,
+          marginTop: 12,
+        },
         paragraph: { marginBottom: 8 },
         text: { fontSize: 15, lineHeight: 22, color: colors.foreground },
         strong: { fontWeight: "700" },
@@ -83,12 +120,23 @@ function MarkdownPreview({ content, colors }: { content: string; colors: ThemeCo
           lineHeight: 18,
           fontFamily: Platform.select({ ios: "Menlo", android: "monospace" }),
         },
-        blockquote: { borderLeftWidth: 3, borderLeftColor: colors.border, paddingLeft: 12, marginBottom: 8 },
+        blockquote: {
+          borderLeftWidth: 3,
+          borderLeftColor: colors.border,
+          paddingLeft: 12,
+          marginBottom: 8,
+        },
         link: { color: colors.primary, textDecorationLine: "underline" },
         hr: { backgroundColor: colors.border, marginVertical: 12 },
         list: { marginBottom: 8 },
         li: { fontSize: 15, lineHeight: 22, color: colors.foreground },
-        table: { borderWidth: 1, borderColor: colors.border, borderRadius: 6, overflow: "hidden", marginBottom: 8 },
+        table: {
+          borderWidth: 1,
+          borderColor: colors.border,
+          borderRadius: 6,
+          overflow: "hidden",
+          marginBottom: 8,
+        },
         tableRow: { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border },
         tableCell: { paddingVertical: 6, paddingHorizontal: 10 },
         image: { borderRadius: 8, marginVertical: 8 },
@@ -97,7 +145,6 @@ function MarkdownPreview({ content, colors }: { content: string; colors: ThemeCo
     />
   );
 }
-
 
 // Helper: find the book dir path and md path from a book
 function getMdPath(bookId: string): Promise<string> {
@@ -166,6 +213,11 @@ export function DocumentEditorScreen() {
   const { bookId } = route.params;
   const book = useLibraryStore((s) => s.books.find((b) => b.id === bookId));
   const saveDocument = useLibraryStore((s) => s.saveDocument);
+  const hasAnnotations = useAnnotationStore(
+    (s) =>
+      s.highlights.some((highlight) => highlight.bookId === bookId) ||
+      s.notes.some((note) => note.bookId === bookId),
+  );
 
   const [markdown, setMarkdown] = useState("");
   const [isLoading, setIsLoading] = useState(true);
@@ -327,6 +379,23 @@ export function DocumentEditorScreen() {
     };
   }, [persist]);
 
+  const confirmAnnotationsMayShift = useCallback((): Promise<boolean> => {
+    if (!hasAnnotations) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      Alert.alert(
+        t("editor.annotationsMayShiftTitle", "标注位置可能变化"),
+        t(
+          "editor.annotationsMayShift",
+          "保存会重新生成该文档的 EPUB，已有高亮和笔记的位置可能发生偏移。仍要继续吗？",
+        ),
+        [
+          { text: t("common.cancel", "取消"), style: "cancel", onPress: () => resolve(false) },
+          { text: t("common.confirm", "确定"), onPress: () => resolve(true) },
+        ],
+      );
+    });
+  }, [hasAnnotations, t]);
+
   const handleSave = useCallback(async () => {
     if (isSaving) return;
     if (isReadOnly) return;
@@ -340,6 +409,7 @@ export function DocumentEditorScreen() {
       );
       return;
     }
+    if (!(await confirmAnnotationsMayShift())) return;
     setIsSaving(true);
     try {
       const saved = await persist(markdown);
@@ -347,7 +417,7 @@ export function DocumentEditorScreen() {
     } finally {
       setIsSaving(false);
     }
-  }, [isSaving, isReadOnly, markdown, persist, t]);
+  }, [confirmAnnotationsMayShift, isSaving, isReadOnly, markdown, persist, t]);
 
   const handleToolbarAction = useCallback(
     (syntax: { prefix: string; suffix: string; placeholder: string }) => {
@@ -387,8 +457,10 @@ export function DocumentEditorScreen() {
             style={s.headerBtn}
             onPress={async () => {
               // The reader opens the derived EPUB: persist pending edits first.
+              if (!(await confirmAnnotationsMayShift())) return;
               if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
-              await persist(markdown, { silent: true });
+              const saved = await persist(markdown, { silent: true });
+              if (!saved && markdown.trim()) return;
               nav.navigate("Reader", { bookId });
             }}
           >
